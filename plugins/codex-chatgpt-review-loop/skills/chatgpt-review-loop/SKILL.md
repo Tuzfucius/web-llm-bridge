@@ -29,18 +29,17 @@ browser transport.
    the commit to be pushed first.
 4. Repeat the following bounded loop; the driver owns `MAX_ROUNDS = 3`:
    - On `status == PASS`, output `@@WEB_REVIEW_PASS@@` and end the Skill.
-   - On `status == REVISE` with `round < MAX_ROUNDS`, read and validate the
-     returned `codex_prompt`, then execute it against the current repository.
+   - On `status == REVISE`, read and validate the returned `codex_prompt`, then
+     execute it against the current repository.
      Run the required tests, inspect `git status`, commit the fix, and push
      when required.
    - Keep `Original task` unchanged while updating `Implementation summary`
      and `Tests`. Write a new complete `REVIEW_CONTEXT` block to a UTF-8
      temporary file and call `review_driver review` again directly. Do not emit
      `@@REVIEW_READY@@` and do not wait for another Stop hook between rounds.
-5. On `status == REVISE` with `round >= MAX_ROUNDS`, do not execute the
-   `codex_prompt`, modify files, commit, push, or send a fourth review request.
-   Preserve the reviewer findings and prompt in the final report, and stop with
-   `MAX_ROUNDS_REVISE` for user handling.
+5. On `status == MAX_ROUNDS_REVISE`, do not execute the `codex_prompt`, modify
+   files, commit, push, or send a fourth review request. Preserve the reviewer
+   findings and prompt in the final report, then stop for user handling.
 6. On `WORKTREE_DIRTY`, `NOT_PUSHED`, `NO_CODE_CHANGE`, `MAX_ROUNDS`,
    `REVIEW_CONTEXT_MISSING`, `REVIEW_CONTEXT_MISMATCH`,
    `REVIEW_DELIVERY_UNKNOWN`, `PROTOCOL_ERROR`, or Bridge errors, stop and

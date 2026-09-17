@@ -50,7 +50,9 @@ def _has_active_cycle(state: Mapping[str, Any]) -> bool:
 
 
 def _migrate(value: Mapping[str, Any]) -> dict[str, Any]:
-    version = value.get("version", 1)
+    if "version" not in value:
+        raise StateError("review state is missing version")
+    version = value["version"]
     if isinstance(version, bool) or not isinstance(version, int) or version < 1 or version > STATE_VERSION:
         raise UnsupportedStateVersion(f"unsupported review state version: {version!r}")
 

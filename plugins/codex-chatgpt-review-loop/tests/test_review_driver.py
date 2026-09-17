@@ -82,6 +82,7 @@ def test_pass_and_same_sha_guard(tmp_path):
     client = FakeClient(["审查完成 @@CODEX_REVIEW_STATUS=PASS@@"])
     first = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert first["status"] == "PASS"
+    assert "CODEX_REVIEW_STATUS=PASS" in first["review_text"]
     state = load(STATE_PATH, "review_state_pass")
     assert state.load_state(repo)["passed_sha"] == first["sha"]
     second = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
@@ -110,6 +111,7 @@ def test_revise_sends_second_stage_and_no_code_change(tmp_path):
     ])
     result = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert result["status"] == "REVISE"
+    assert "CODEX_REVIEW_STATUS=REVISE" in result["review_text"]
     assert result["codex_prompt"] == "修复问题并运行测试"
     assert len(client.chats) == 2
     blocked = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
@@ -194,6 +196,71 @@ def test_pending_prompt_recovery_restores_revise_state(tmp_path):
     assert client.chats == []
 
 
+def test_final_round_pending_prompt_recovery_returns_max_rounds_revise(tmp_path):
+    repo = make_repo(tmp_path)
+    driver = load(DRIVER_PATH, "review_driver_pending_prompt_final_round")
+    state_module = load(STATE_PATH, "review_state_pending_prompt_final_round")
+    sha = git(repo, "rev-parse", "HEAD")
+    state_module.save_state(
+        repo,
+        {
+            **state_module.default_state(),
+            "session_id": "session-1",
+            "conversation_url": "https://chatgpt.com/c/1",
+            "round": 3,
+            "last_review_sha": sha,
+            "last_status": "REVIEW_DELIVERY_UNKNOWN",
+            "pending_request_id": "prompt:abc",
+        },
+    )
+    client = FakeClient([])
+    client.history = [
+        {"role": "user", "content": "@@CODEX_PROMPT_REQUEST=abc@@"},
+        {"role": "assistant", "content": "@@CODEX_PROMPT_BEGIN@@\n最终修复\n@@CODEX_PROMPT_END@@"},
+    ]
+    result = __import__("asyncio").run(
+        driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context())
+    )
+    assert result["status"] == "MAX_ROUNDS_REVISE"
+    assert result["codex_prompt"] == "最终修复"
+    assert result["round"] == 3
+    state = state_module.load_state(repo)
+    assert state["last_status"] == "MAX_ROUNDS"
+    assert state["pending_request_id"] is None
+    assert client.chats == []
+
+
+def test_pending_review_recovery_returns_review_text(tmp_path):
+    repo = make_repo(tmp_path)
+    driver = load(DRIVER_PATH, "review_driver_pending_review_text")
+    state_module = load(STATE_PATH, "review_state_pending_review_text")
+    sha = git(repo, "rev-parse", "HEAD")
+    state_module.save_state(
+        repo,
+        {
+            **state_module.default_state(),
+            "session_id": "session-1",
+            "conversation_url": "https://chatgpt.com/c/1",
+            "round": 1,
+            "last_review_sha": sha,
+            "last_status": "REVIEW_DELIVERY_UNKNOWN",
+            "pending_request_id": "abc",
+        },
+    )
+    reviewer_text = "发现无问题\n@@CODEX_REVIEW_STATUS=PASS@@"
+    client = FakeClient([])
+    client.history = [
+        {"role": "user", "content": "@@CODEX_REVIEW_REQUEST=abc@@"},
+        {"role": "assistant", "content": reviewer_text},
+    ]
+    result = __import__("asyncio").run(
+        driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context())
+    )
+    assert result["status"] == "PASS"
+    assert result["review_text"] == reviewer_text
+    assert client.chats == []
+
+
 def test_review_requires_context_and_rejects_empty_fields(tmp_path):
     repo = make_repo(tmp_path)
     driver = load(DRIVER_PATH, "review_driver_context_required")
@@ -272,7 +339,7 @@ def test_history_recovery_ignores_assistant_request_marker():
         {"role": "assistant", "content": "@@CODEX_REVIEW_REQUEST=abc@@"},
         {"role": "assistant", "content": "@@CODEX_REVIEW_STATUS=PASS@@"},
     ]
-    result = __import__("asyncio").run(
+    result, recovered_text = __import__("asyncio").run(
         driver._history_recovery(
             client,
             session_id="session-1",
@@ -281,6 +348,7 @@ def test_history_recovery_ignores_assistant_request_marker():
         )
     )
     assert result is None
+    assert recovered_text is None
 
 
 def test_history_recovery_does_not_cross_next_user_request():
@@ -292,7 +360,7 @@ def test_history_recovery_does_not_cross_next_user_request():
         {"role": "user", "content": "unrelated request"},
         {"role": "assistant", "content": "@@CODEX_REVIEW_STATUS=PASS@@"},
     ]
-    result = __import__("asyncio").run(
+    result, recovered_text = __import__("asyncio").run(
         driver._history_recovery(
             client,
             session_id="session-1",
@@ -301,6 +369,27 @@ def test_history_recovery_does_not_cross_next_user_request():
         )
     )
     assert result is None
+    assert recovered_text is None
+
+
+def test_history_recovery_returns_original_reviewer_text():
+    driver = load(DRIVER_PATH, "review_driver_history_text")
+    client = FakeClient([])
+    reviewer_text = "发现 session race\n@@CODEX_REVIEW_STATUS=REVISE@@"
+    client.history = [
+        {"role": "user", "content": "@@CODEX_REVIEW_REQUEST=abc@@"},
+        {"role": "assistant", "content": reviewer_text},
+    ]
+    result, recovered_text = __import__("asyncio").run(
+        driver._history_recovery(
+            client,
+            session_id="session-1",
+            request_marker="@@CODEX_REVIEW_REQUEST=abc@@",
+            parse_response=lambda text: {"ok": "REVISE" in text, "status": "REVISE"},
+        )
+    )
+    assert result["status"] == "REVISE"
+    assert recovered_text == reviewer_text
 
 
 def _commit_change(repo: Path, value: int, message: str) -> None:
@@ -345,17 +434,27 @@ def test_revise_new_commit_increments_round_and_max_is_cycle_scoped(tmp_path):
             assert result["round"] == 2
         _commit_change(repo, value + 2, message)
 
+    third_client = FakeClient(["@@CODEX_REVIEW_STATUS=REVISE@@", "@@CODEX_PROMPT_BEGIN@@fix@@CODEX_PROMPT_END@@"])
     third = __import__("asyncio").run(
         driver.run_review(
             repo,
-            client=FakeClient(["@@CODEX_REVIEW_STATUS=REVISE@@", "@@CODEX_PROMPT_BEGIN@@fix@@CODEX_PROMPT_END@@"]),
+            client=third_client,
             ensure_broker_fn=lambda: None,
             review_context=context,
         )
     )
-    assert third["status"] == "REVISE"
+    assert third["status"] == "MAX_ROUNDS_REVISE"
+    assert third["code"] == "MAX_ROUNDS_REVISE"
     assert third["round"] == 3
-    _commit_change(repo, 5, "maxed out")
+    assert third["codex_prompt"] == "fix"
+    assert "CODEX_REVIEW_STATUS=REVISE" in third["review_text"]
+    assert len(third_client.chats) == 2
+    state_module = load(STATE_PATH, "review_state_cycle_revise_terminal")
+    terminal_state = state_module.load_state(repo)
+    assert terminal_state["last_status"] == "MAX_ROUNDS"
+    assert terminal_state["pending_request_id"] is None
+    assert terminal_state["round"] == 3
+    assert "review_text" not in terminal_state
     blocked = __import__("asyncio").run(
         driver.run_review(repo, client=FakeClient([]), ensure_broker_fn=lambda: None, review_context=context)
     )

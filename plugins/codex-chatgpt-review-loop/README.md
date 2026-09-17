@@ -70,7 +70,9 @@ SessionStart injects the lifecycle policy for producing context and
 sentinel; it allows only a final non-empty `@@WEB_REVIEW_PASS@@` line and never
 contacts the Bridge. After the initial handoff, the Skill drives subsequent
 REVISE rounds directly and never routes them through Stop again. A REVISE at
-the maximum round is reported without executing its prompt. Unknown prompt
+the maximum round is returned by the Driver as `MAX_ROUNDS_REVISE` without
+executing its prompt. Review results expose the first-stage `review_text` and,
+for REVISE, the separate `codex_prompt` for user handling. Unknown prompt
 delivery is recovered only from a user request marker in conversation history;
 successful prompt recovery restores `last_status=REVISE` and same-SHA calls
 return `NO_CODE_CHANGE`.

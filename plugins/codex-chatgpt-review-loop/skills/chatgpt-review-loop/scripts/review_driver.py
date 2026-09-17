@@ -180,8 +180,8 @@ async def _history_recovery(
     session_id: str,
     request_marker: str,
     parse_response: Callable[[str], dict[str, Any]],
-) -> dict[str, Any] | None:
-    """Recover a sent request without issuing a second unsafe message."""
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Recover a sent request and return parsed data plus original text."""
 
     try:
         history = await client.get_messages(
@@ -191,7 +191,7 @@ async def _history_recovery(
             full=True,
         )
     except Exception:
-        return None
+        return None, None
 
     messages = _message_list(history)
     marker_index = -1
@@ -201,7 +201,7 @@ async def _history_recovery(
         if request_marker in str(message.get("content", "")):
             marker_index = index
     if marker_index < 0:
-        return None
+        return None, None
 
     for message in messages[marker_index + 1 :]:
         role = str(message.get("role", "")).lower()
@@ -211,8 +211,8 @@ async def _history_recovery(
             continue
         parsed = parse_response(str(message.get("content", "")))
         if parsed.get("ok"):
-            return parsed
-    return None
+            return parsed, str(message.get("content", ""))
+    return None, None
 
 
 async def _chat_once(
@@ -222,8 +222,8 @@ async def _chat_once(
     session_id: str,
     request_marker: str,
     parse_response: Callable[[str], dict[str, Any]],
-) -> tuple[dict[str, Any] | None, Any | None]:
-    """Send once, retry only when the Bridge explicitly permits it."""
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Send once and return parsed data plus raw text."""
 
     retried = False
     while True:
@@ -232,19 +232,19 @@ async def _chat_once(
             response_text = result.get("text") if isinstance(result, dict) else None
             if not isinstance(response_text, str):
                 raise DriverError("INVALID_RESPONSE", "Bridge chat() 缺少 text 字段")
-            return parse_response(response_text), result
+            return parse_response(response_text), response_text
         except Exception as error:
             if _safe_to_retry(error) and not retried:
                 retried = True
                 continue
-            recovered = await _history_recovery(
+            recovered, recovered_text = await _history_recovery(
                 client,
                 session_id=session_id,
                 request_marker=request_marker,
                 parse_response=parse_response,
             )
             if recovered is not None:
-                return recovered, None
+                return recovered, recovered_text
             code = _error_code(error)
             if code == "CHAT_STATE_UNKNOWN" or not _safe_to_retry(error):
                 raise DriverError("REVIEW_DELIVERY_UNKNOWN", str(error)) from error
@@ -294,8 +294,8 @@ async def _open_session(client: Any, state: dict[str, Any]) -> tuple[str, str | 
     return _open_metadata(result)
 
 
-def _review_output(status: str, *, sha: str | None = None, session_id: str | None = None, conversation_url: str | None = None, round_number: int | None = None, **extra: Any) -> dict[str, Any]:
-    result: dict[str, Any] = {"ok": True, "status": status}
+def _review_output(status: str, *, ok: bool = True, sha: str | None = None, session_id: str | None = None, conversation_url: str | None = None, round_number: int | None = None, **extra: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {"ok": ok, "status": status}
     if sha is not None:
         result["sha"] = sha
     if session_id is not None:
@@ -433,7 +433,7 @@ async def run_review(
         if pending.startswith("prompt:"):
             request_id = pending.removeprefix("prompt:")
             marker, _ = _prompt_request(request_id)
-            parsed = await _history_recovery(client, session_id=session_id or "", request_marker=marker, parse_response=parse_codex_prompt)
+            parsed, _ = await _history_recovery(client, session_id=session_id or "", request_marker=marker, parse_response=parse_codex_prompt)
             if parsed is None:
                 return {"ok": False, "status": "REVIEW_DELIVERY_UNKNOWN", "code": "REVIEW_DELIVERY_UNKNOWN", "sha": sha, "pending_request_id": pending}
             state.update({
@@ -443,17 +443,31 @@ async def run_review(
                 "last_review_sha": sha,
                 "last_status": "REVISE",
             })
+            if int(state.get("round", 0)) >= max_rounds:
+                state["last_status"] = "MAX_ROUNDS"
+                save_state(root, state)
+                return _review_output(
+                    "MAX_ROUNDS_REVISE",
+                    ok=False,
+                    code="MAX_ROUNDS_REVISE",
+                    sha=sha,
+                    session_id=session_id,
+                    conversation_url=conversation_url,
+                    round_number=int(state.get("round", 0)),
+                    codex_prompt=parsed["codex_prompt"],
+                    review_text=None,
+                )
             save_state(root, state)
             return _review_output("REVISE", sha=sha, session_id=session_id, conversation_url=conversation_url, round_number=int(state.get("round", 0)), codex_prompt=parsed["codex_prompt"])
         marker = f"@@CODEX_REVIEW_REQUEST={pending}@@"
-        parsed, _ = await _history_recovery(client, session_id=session_id or "", request_marker=marker, parse_response=parse_review)
+        parsed, review_text = await _history_recovery(client, session_id=session_id or "", request_marker=marker, parse_response=parse_review)
         if parsed is None:
             return {"ok": False, "status": "REVIEW_DELIVERY_UNKNOWN", "code": "REVIEW_DELIVERY_UNKNOWN", "sha": sha, "pending_request_id": pending}
         state = {**state, "session_id": session_id, "conversation_url": conversation_url, "pending_request_id": None}
         if parsed.get("status") == "PASS":
             state.update({"passed_sha": sha, "last_review_sha": sha, "last_status": "PASS"})
             save_state(root, state)
-            return _review_output("PASS", sha=sha, session_id=session_id, conversation_url=conversation_url, round_number=int(state.get("round", 0)))
+            return _review_output("PASS", sha=sha, session_id=session_id, conversation_url=conversation_url, round_number=int(state.get("round", 0)), review_text=review_text)
         if parsed.get("status") == "REVISE":
             request_id = pending
             prompt_marker, prompt_text = _prompt_request(request_id)
@@ -478,8 +492,22 @@ async def run_review(
                 save_state(root, state)
                 return {"ok": False, "status": "PROTOCOL_ERROR", "code": "PROTOCOL_ERROR", "sha": sha, "round": int(state.get("round", 0))}
             state["pending_request_id"] = None
+            if int(state.get("round", 0)) >= max_rounds:
+                state["last_status"] = "MAX_ROUNDS"
+                save_state(root, state)
+                return _review_output(
+                    "MAX_ROUNDS_REVISE",
+                    ok=False,
+                    code="MAX_ROUNDS_REVISE",
+                    sha=sha,
+                    session_id=session_id,
+                    conversation_url=conversation_url,
+                    round_number=int(state.get("round", 0)),
+                    review_text=review_text,
+                    codex_prompt=prompt_result["codex_prompt"],
+                )
             save_state(root, state)
-            return _review_output("REVISE", sha=sha, session_id=session_id, conversation_url=conversation_url, round_number=int(state.get("round", 0)), codex_prompt=prompt_result["codex_prompt"])
+            return _review_output("REVISE", sha=sha, session_id=session_id, conversation_url=conversation_url, round_number=int(state.get("round", 0)), review_text=review_text, codex_prompt=prompt_result["codex_prompt"])
 
     if state.get("last_review_sha") == sha and state.get("last_status") == "REVISE":
         return {"ok": False, "status": "NO_CODE_CHANGE", "code": "NO_CODE_CHANGE", "sha": sha, "round": int(state.get("round", 0))}
@@ -505,7 +533,7 @@ async def run_review(
     save_state(root, state)
 
     try:
-        parsed, _ = await _chat_once(
+        parsed, review_text = await _chat_once(
             client,
             str(context["prompt"]),
             session_id=session_id or "",
@@ -530,14 +558,14 @@ async def run_review(
     if not parsed or not parsed.get("ok"):
         state.update({"last_review_sha": sha, "last_status": "PROTOCOL_ERROR", "pending_request_id": None})
         save_state(root, state)
-        return {"ok": False, "status": "PROTOCOL_ERROR", "code": "PROTOCOL_ERROR", "sha": sha, "round": round_number}
+        return {"ok": False, "status": "PROTOCOL_ERROR", "code": "PROTOCOL_ERROR", "sha": sha, "round": round_number, "review_text": review_text}
 
     status = parsed.get("status")
     state.update({"last_review_sha": sha, "last_status": status, "pending_request_id": None})
     if status == "PASS":
         state["passed_sha"] = sha
         save_state(root, state)
-        return _review_output("PASS", sha=sha, session_id=session_id, conversation_url=conversation_url, round_number=round_number)
+        return _review_output("PASS", sha=sha, session_id=session_id, conversation_url=conversation_url, round_number=round_number, review_text=review_text)
     if status != "REVISE":
         save_state(root, state)
         raise _protocol_error(parsed)
@@ -574,6 +602,20 @@ async def run_review(
         save_state(root, state)
         return {"ok": False, "status": "PROTOCOL_ERROR", "code": "PROTOCOL_ERROR", "sha": sha, "round": round_number}
     state["pending_request_id"] = None
+    if round_number >= max_rounds:
+        state["last_status"] = "MAX_ROUNDS"
+        save_state(root, state)
+        return _review_output(
+            "MAX_ROUNDS_REVISE",
+            ok=False,
+            code="MAX_ROUNDS_REVISE",
+            sha=sha,
+            session_id=session_id,
+            conversation_url=conversation_url,
+            round_number=round_number,
+            review_text=review_text,
+            codex_prompt=prompt_result["codex_prompt"],
+        )
     save_state(root, state)
     return _review_output(
         "REVISE",
@@ -581,6 +623,7 @@ async def run_review(
         session_id=session_id,
         conversation_url=conversation_url,
         round_number=round_number,
+        review_text=review_text,
         codex_prompt=prompt_result["codex_prompt"],
     )
 

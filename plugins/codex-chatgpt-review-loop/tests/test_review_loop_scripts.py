@@ -89,7 +89,7 @@ def test_state_corrupt_json_is_structured_error(tmp_path):
     assert error.value.code == "STATE_CORRUPT"
 
 
-@pytest.mark.parametrize("version", [3, "3", True, None, -1])
+@pytest.mark.parametrize("version", [3, "3", True, None, -1, 0])
 def test_future_or_invalid_state_version_is_rejected(tmp_path, version):
     state = load("review_state")
     repo = make_repo(tmp_path)
@@ -103,10 +103,23 @@ def test_future_or_invalid_state_version_is_rejected(tmp_path, version):
 
 def test_skill_does_not_modify_after_final_revise_round():
     skill = SKILL_PATH.read_text(encoding="utf-8")
-    assert "status == REVISE` with `round < MAX_ROUNDS" in skill
-    assert "status == REVISE` with `round >= MAX_ROUNDS" in skill
+    assert "status == REVISE`" in skill
+    assert "status == MAX_ROUNDS_REVISE" in skill
+    assert "round < MAX_ROUNDS" not in skill
+    assert "round >= MAX_ROUNDS" not in skill
     assert "do not execute the" in skill
-    assert "MAX_ROUNDS_REVISE" in skill
+
+
+def test_missing_state_version_is_corrupt(tmp_path):
+    state = load("review_state")
+    repo = make_repo(tmp_path)
+    path = state.state_path(repo)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"round": 1}), encoding="utf-8")
+    with pytest.raises(state.StateError) as error:
+        state.load_state(repo)
+    assert error.value.code == "STATE_CORRUPT"
+    assert "missing version" in str(error.value)
 
 
 @pytest.mark.parametrize(
