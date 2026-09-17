@@ -82,6 +82,8 @@ def test_pass_and_same_sha_guard(tmp_path):
     client = FakeClient(["审查完成 @@CODEX_REVIEW_STATUS=PASS@@"])
     first = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert first["status"] == "PASS"
+    assert "review_text" in first
+    assert isinstance(first["review_text"], str)
     assert "CODEX_REVIEW_STATUS=PASS" in first["review_text"]
     state = load(STATE_PATH, "review_state_pass")
     assert state.load_state(repo)["passed_sha"] == first["sha"]
@@ -111,7 +113,10 @@ def test_revise_sends_second_stage_and_no_code_change(tmp_path):
     ])
     result = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert result["status"] == "REVISE"
+    assert "review_text" in result
+    assert isinstance(result["review_text"], str)
     assert "CODEX_REVIEW_STATUS=REVISE" in result["review_text"]
+    assert isinstance(result["codex_prompt"], str)
     assert result["codex_prompt"] == "修复问题并运行测试"
     assert len(client.chats) == 2
     blocked = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
@@ -160,6 +165,38 @@ def test_resume_pending_prompt_request_without_sending_again(tmp_path):
     result = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert result["status"] == "REVISE"
     assert result["codex_prompt"] == "修复 X"
+    assert client.chats == []
+
+
+def test_pending_prompt_recovery_schema_returns_null_review_text(tmp_path):
+    repo = make_repo(tmp_path)
+    driver = load(DRIVER_PATH, "review_driver_pending_prompt_schema")
+    state_module = load(STATE_PATH, "review_state_pending_prompt_schema")
+    sha = git(repo, "rev-parse", "HEAD")
+    state_module.save_state(
+        repo,
+        {
+            **state_module.default_state(),
+            "session_id": "session-1",
+            "conversation_url": "https://chatgpt.com/c/1",
+            "round": 1,
+            "last_review_sha": sha,
+            "last_status": "REVIEW_DELIVERY_UNKNOWN",
+            "pending_request_id": "prompt:abc",
+        },
+    )
+    client = FakeClient([])
+    client.history = [
+        {"role": "user", "content": "@@CODEX_PROMPT_REQUEST=abc@@"},
+        {"role": "assistant", "content": "@@CODEX_PROMPT_BEGIN@@\nfix\n@@CODEX_PROMPT_END@@"},
+    ]
+    result = __import__("asyncio").run(
+        driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context())
+    )
+    assert result["status"] == "REVISE"
+    assert "review_text" in result
+    assert result["review_text"] is None
+    assert result["codex_prompt"] == "fix"
     assert client.chats == []
 
 
@@ -222,6 +259,8 @@ def test_final_round_pending_prompt_recovery_returns_max_rounds_revise(tmp_path)
         driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context())
     )
     assert result["status"] == "MAX_ROUNDS_REVISE"
+    assert "review_text" in result
+    assert result["review_text"] is None
     assert result["codex_prompt"] == "最终修复"
     assert result["round"] == 3
     state = state_module.load_state(repo)
@@ -446,6 +485,8 @@ def test_revise_new_commit_increments_round_and_max_is_cycle_scoped(tmp_path):
     assert third["status"] == "MAX_ROUNDS_REVISE"
     assert third["code"] == "MAX_ROUNDS_REVISE"
     assert third["round"] == 3
+    assert "review_text" in third
+    assert isinstance(third["review_text"], str)
     assert third["codex_prompt"] == "fix"
     assert "CODEX_REVIEW_STATUS=REVISE" in third["review_text"]
     assert len(third_client.chats) == 2
@@ -459,6 +500,42 @@ def test_revise_new_commit_increments_round_and_max_is_cycle_scoped(tmp_path):
         driver.run_review(repo, client=FakeClient([]), ensure_broker_fn=lambda: None, review_context=context)
     )
     assert blocked["status"] == "MAX_ROUNDS"
+    terminal_cycle = terminal_state["cycle_id"]
+    terminal_sha = terminal_state["last_review_sha"]
+    terminal_task_hash = terminal_state["task_hash"]
+
+    same_sha_new_task_client = FakeClient([])
+    same_sha_new_task = __import__("asyncio").run(
+        driver.run_review(
+            repo,
+            client=same_sha_new_task_client,
+            ensure_broker_fn=lambda: None,
+            review_context={"original_task": "new task", "implementation_summary": "implementation", "tests": "pytest"},
+        )
+    )
+    assert same_sha_new_task["status"] == "MAX_ROUNDS"
+    assert same_sha_new_task["round"] == 3
+    assert same_sha_new_task["sha"] == terminal_sha
+    assert same_sha_new_task_client.chats == []
+    unchanged_state = state_module.load_state(repo)
+    assert unchanged_state["cycle_id"] == terminal_cycle
+    assert unchanged_state["task_hash"] == terminal_task_hash
+
+    _commit_change(repo, 5, "unrelated commit")
+    new_sha_same_task_client = FakeClient([])
+    new_sha_same_task = __import__("asyncio").run(
+        driver.run_review(
+            repo,
+            client=new_sha_same_task_client,
+            ensure_broker_fn=lambda: None,
+            review_context=context,
+        )
+    )
+    assert new_sha_same_task["status"] == "MAX_ROUNDS"
+    assert new_sha_same_task["round"] == 3
+    assert new_sha_same_task_client.chats == []
+    assert state_module.load_state(repo)["cycle_id"] == terminal_cycle
+
     fresh = __import__("asyncio").run(
         driver.run_review(
             repo,
@@ -469,3 +546,6 @@ def test_revise_new_commit_increments_round_and_max_is_cycle_scoped(tmp_path):
     )
     assert fresh["status"] == "PASS"
     assert fresh["round"] == 1
+    fresh_state = state_module.load_state(repo)
+    assert fresh_state["cycle_id"] != terminal_cycle
+    assert fresh_state["task_hash"] != terminal_task_hash

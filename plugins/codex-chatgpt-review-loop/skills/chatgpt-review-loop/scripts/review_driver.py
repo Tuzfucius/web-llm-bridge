@@ -379,13 +379,21 @@ async def run_review(
             "cycle_id": _new_cycle_id(),
         })
 
-    # MAX_ROUNDS is terminal only for the current task.  A new original task
-    # supplied in REVIEW_CONTEXT is allowed to begin a new cycle.
-    if (
-        state.get("last_status") == "MAX_ROUNDS"
-        and state.get("task_hash") != task_hash
-        and not state.get("pending_request_id")
-    ):
+    # MAX_ROUNDS is terminal until both the Original task and the reviewed
+    # commit change.  Keep the exhausted state unchanged when only context or
+    # an unrelated commit changes, so neither can bypass the terminal cycle.
+    if state.get("last_status") == "MAX_ROUNDS" and not state.get("pending_request_id"):
+        task_changed = state.get("task_hash") != task_hash
+        sha_changed = state.get("last_review_sha") != sha
+        if not (task_changed and sha_changed):
+            return _review_output(
+                "MAX_ROUNDS",
+                ok=False,
+                code="MAX_ROUNDS",
+                sha=sha,
+                round_number=int(state.get("round", 0)),
+                message="Current HEAD already exhausted the review cycle; create a new committed change before starting a new task.",
+            )
         state.update({
             "round": 0,
             "last_review_sha": None,
@@ -458,7 +466,7 @@ async def run_review(
                     review_text=None,
                 )
             save_state(root, state)
-            return _review_output("REVISE", sha=sha, session_id=session_id, conversation_url=conversation_url, round_number=int(state.get("round", 0)), codex_prompt=parsed["codex_prompt"])
+            return _review_output("REVISE", sha=sha, session_id=session_id, conversation_url=conversation_url, round_number=int(state.get("round", 0)), review_text=None, codex_prompt=parsed["codex_prompt"])
         marker = f"@@CODEX_REVIEW_REQUEST={pending}@@"
         parsed, review_text = await _history_recovery(client, session_id=session_id or "", request_marker=marker, parse_response=parse_review)
         if parsed is None:

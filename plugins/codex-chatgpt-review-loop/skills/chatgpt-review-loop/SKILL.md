@@ -66,7 +66,8 @@ browser transport.
 - Review state is persisted by the driver at `.git/codex-chatgpt-review/state.json`.
 - The state round is scoped to one review cycle. A new commit after PASS starts
   round one again; REVISE commits advance the same cycle through at most three
-  rounds. A new original task context can start a new cycle after MAX_ROUNDS.
+  rounds. After MAX_ROUNDS, a new cycle requires both a new original task
+  context and a new committed HEAD.
 - `task_hash` records the normalized Original task for drift detection while a
   unique `cycle_id` isolates request IDs. During an active REVISE cycle,
   `Original task` must remain unchanged; a changed task returns
@@ -74,6 +75,10 @@ browser transport.
 - Pending review or prompt requests are recovered from `get_messages()` by
   their deterministic marker. If delivery cannot be proven, the driver returns
   `REVIEW_DELIVERY_UNKNOWN` and must not resend.
+- Results with `status` PASS, REVISE, or MAX_ROUNDS_REVISE always include
+  `review_text`. Prompt recovery may return `review_text: null` when the
+  second-stage prompt is proven but the first-stage reviewer text cannot be
+  deterministically reconstructed.
 - If the Bridge driver is unavailable, report the limitation and stop.
 
 The old DOM runtime is retained only under `experimental/native-browser/` and

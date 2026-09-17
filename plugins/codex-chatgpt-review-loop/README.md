@@ -44,8 +44,8 @@ bounded review attempt. The file contains the deterministic
 development turn and must not be stored in a tracked path. State is stored
 below `.git/codex-chatgpt-review/state.json`; it contains no cookies or tokens.
 Three automatic rounds are allowed per review cycle. PASS followed by a new
-commit starts a new cycle, and a new original task context can start a new
-cycle after MAX_ROUNDS.
+commit starts a new cycle. After MAX_ROUNDS, a new cycle requires both a new
+original task context and a new committed HEAD.
 Each request marker includes repository identity, cycle identity, HEAD SHA, and
 round, so identical commits in different cycles cannot collide during recovery.
 
@@ -71,8 +71,11 @@ sentinel; it allows only a final non-empty `@@WEB_REVIEW_PASS@@` line and never
 contacts the Bridge. After the initial handoff, the Skill drives subsequent
 REVISE rounds directly and never routes them through Stop again. A REVISE at
 the maximum round is returned by the Driver as `MAX_ROUNDS_REVISE` without
-executing its prompt. Review results expose the first-stage `review_text` and,
-for REVISE, the separate `codex_prompt` for user handling. Unknown prompt
+executing its prompt. Review results for PASS, REVISE, and MAX_ROUNDS_REVISE
+always expose the first-stage `review_text` field. It is `null` only when prompt
+recovery proves the second-stage prompt but cannot deterministically reconstruct
+the first-stage review. For REVISE, the separate `codex_prompt` is returned for
+user handling. Unknown prompt
 delivery is recovered only from a user request marker in conversation history;
 successful prompt recovery restores `last_status=REVISE` and same-SHA calls
 return `NO_CODE_CHANGE`.
