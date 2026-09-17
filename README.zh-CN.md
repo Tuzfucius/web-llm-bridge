@@ -105,6 +105,38 @@ cat prompt.md | web-llm-agent chat --stdin --json
 
 需要明确指定持久化 Session 时，可使用 `--session-id SESSION_ID`。
 
+### 项目 Provider 配置
+
+Agent 命令和 Python `WebLLMSession` API 按以下顺序解析 Provider：
+
+```text
+--provider（或显式 API 参数）
+    > 最近父目录中的 .web-llm-bridge.json
+    > 内置默认值：chatgpt
+```
+
+如果项目需要选择其他已注册 Provider，可在项目根目录创建
+`.web-llm-bridge.json`：
+
+```json
+{
+  "version": 1,
+  "default_provider": "chatgpt"
+}
+```
+
+例如，显式参数优先于项目配置，并且只校验指定的已注册 Provider，不会读取项目配置文件。因此，即使最近的项目配置文件损坏，显式指定 Provider 的调用仍可继续：
+
+```console
+web-llm-agent chat --provider chatgpt --text "hello"
+```
+
+该文件只能选择 Bridge 源码中已经注册的 Provider，不能定义 host、URL、
+Adapter、凭据或新的 Provider。只有在解析过程需要读取项目配置时，JSON
+语法错误、不支持的版本、无效字段值和未知 Provider ID 才会明确报错，不会
+静默回退到 ChatGPT；显式 `--provider` 或 Python API 的 `provider` 参数都会
+绕过该文件。
+
 ## Agent 使用方式
 
 任何能够执行 Shell 命令、写入 stdin 并读取 stdout 的本地 Agent 都可以使用 Web LLM Bridge，包括 Codex、Claude Code、OpenClaw、Hermes 和自定义 Agent。

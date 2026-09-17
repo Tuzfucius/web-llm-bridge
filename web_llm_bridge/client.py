@@ -8,6 +8,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from .errors import WebLLMBridgeError
+from .config import resolve_provider
 from .protocol import BRIDGE_HOST, BROKER_PORT, MAX_MESSAGE_BYTES
 
 
@@ -21,27 +22,27 @@ class WebLLMClient:
     async def call(self, method: str, params: dict[str, Any], *, progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
         return await rpc_call(method, params, progress=progress, host=self.host, port=self.port)
 
-    async def open(self, *, provider: str = "chatgpt", new: bool = False, url: str | None = None, session_id: str | None = None) -> dict[str, Any]:
-        return await self.call("open", {"provider": provider, "new": new, "url": url, "session_id": session_id})
+    async def open(self, *, provider: str | None = None, new: bool = False, url: str | None = None, session_id: str | None = None) -> dict[str, Any]:
+        return await self.call("open", {"provider": resolve_provider(provider), "new": new, "url": url, "session_id": session_id})
 
-    async def chat(self, text: str, *, provider: str = "chatgpt", session_id: str | None = None, progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
-        return await self.call("chat", {"provider": provider, "session_id": session_id, "text": text}, progress=progress)
+    async def chat(self, text: str, *, provider: str | None = None, session_id: str | None = None, progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
+        return await self.call("chat", {"provider": resolve_provider(provider), "session_id": session_id, "text": text}, progress=progress)
 
-    async def get_messages(self, *, provider: str = "chatgpt", session_id: str | None = None, limit: int | None = None, full: bool = False) -> dict[str, Any]:
-        return await self.call("get_messages", {"provider": provider, "session_id": session_id, "limit": limit, "full": full})
+    async def get_messages(self, *, provider: str | None = None, session_id: str | None = None, limit: int | None = None, full: bool = False) -> dict[str, Any]:
+        return await self.call("get_messages", {"provider": resolve_provider(provider), "session_id": session_id, "limit": limit, "full": full})
 
     async def list_sessions(self, *, provider: str | None = None) -> list[dict[str, Any]]:
-        result = await self.call("list_sessions", {"provider": provider} if provider else {})
+        result = await self.call("list_sessions", {"provider": resolve_provider(provider)} if provider is not None else {})
         sessions = result.get("sessions")
         if not isinstance(sessions, list):
             raise WebLLMBridgeError("Broker 返回无效会话列表", "INVALID_RESPONSE")
         return sessions
 
-    async def close_session(self, session_id: str, *, provider: str = "chatgpt") -> dict[str, Any]:
-        return await self.call("close_session", {"provider": provider, "session_id": session_id})
+    async def close_session(self, session_id: str, *, provider: str | None = None) -> dict[str, Any]:
+        return await self.call("close_session", {"provider": resolve_provider(provider), "session_id": session_id})
 
-    async def forget_session(self, session_id: str, *, provider: str = "chatgpt") -> dict[str, Any]:
-        return await self.call("forget_session", {"provider": provider, "session_id": session_id})
+    async def forget_session(self, session_id: str, *, provider: str | None = None) -> dict[str, Any]:
+        return await self.call("forget_session", {"provider": resolve_provider(provider), "session_id": session_id})
 
     async def get_artifact(self, artifact_id: str, *, output: str | None = None) -> dict[str, Any]:
         return await self.call("get_artifact", {"artifact_id": artifact_id, "output": output})

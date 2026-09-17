@@ -32,7 +32,10 @@ web-llm-agent open --session-id SESSION_ID --json
 Options:
 
 - `--new`, `--url URL`, and `--session-id SESSION_ID` are mutually exclusive;
-- `--provider PROVIDER` defaults to `chatgpt`;
+- `--provider PROVIDER` takes precedence over the nearest
+  `.web-llm-bridge.json` and does not read it, so a malformed project file does
+  not block an explicit registered Provider; without `--provider`, the project
+  default is used and the built-in fallback is `chatgpt`;
 - `--json` writes one machine-readable result to stdout.
 
 Without a target, `open` uses the provider's active Session when available.
@@ -48,7 +51,9 @@ web-llm-agent chat --session-id SESSION_ID --stdin --json < prompt.md
 Exactly one of `--text` and `--stdin` is required. `--stdin` reads until EOF
 and is preferred for code, Markdown, JSON, diffs, logs, and other multiline
 content. `--session-id` is optional and otherwise selects the active Session.
-`--provider` defaults to `chatgpt`.
+`--provider` takes precedence over the project default and bypasses parsing the
+nearest `.web-llm-bridge.json`; without it, that file or built-in `chatgpt` is
+used.
 The JSON result contains only business fields; internal transport request IDs
 are not exposed.
 

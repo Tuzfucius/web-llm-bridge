@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from ..client import rpc_call
+from ..config import resolve_provider
 
 
 @dataclass
@@ -16,31 +17,32 @@ class WebLLMSession:
     conversation_url: str | None = None
 
     @classmethod
-    async def open(cls, *, provider: str = "chatgpt", new: bool = False, url: str | None = None, session_id: str | None = None) -> "WebLLMSession":
-        result = await rpc_call("open", {"provider": provider, "new": new, "url": url, "session_id": session_id})
-        return cls(provider=result["provider"], session_id=result["session_id"], conversation_url=result.get("conversation_url"))
+    async def open(cls, *, provider: str | None = None, new: bool = False, url: str | None = None, session_id: str | None = None) -> "WebLLMSession":
+        resolved_provider = resolve_provider(provider)
+        result = await rpc_call("open", {"provider": resolved_provider, "new": new, "url": url, "session_id": session_id})
+        return cls(provider=resolved_provider, session_id=result["session_id"], conversation_url=result.get("conversation_url"))
 
     async def chat(self, text: str, *, progress: Callable[[dict[str, Any]], None] | None = None) -> str:
         result = await self.chat_result(text, progress=progress)
         return result["text"]
 
     async def chat_result(self, text: str, *, progress: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
-        result = await rpc_call("chat", {"provider": self.provider, "session_id": self.session_id, "text": text}, progress=progress)
+        result = await rpc_call("chat", {"provider": self._provider(), "session_id": self.session_id, "text": text}, progress=progress)
         self._update(result)
         return result
 
     async def get_messages(self, *, limit: int | None = None, full: bool = False) -> list[dict[str, Any]]:
-        result = await rpc_call("get_messages", {"provider": self.provider, "session_id": self.session_id, "limit": limit, "full": full})
+        result = await rpc_call("get_messages", {"provider": self._provider(), "session_id": self.session_id, "limit": limit, "full": full})
         self._update(result)
         return result["messages"]
 
     async def close(self) -> dict[str, Any]:
-        result = await rpc_call("close_session", {"provider": self.provider, "session_id": self.session_id})
+        result = await rpc_call("close_session", {"provider": self._provider(), "session_id": self.session_id})
         self._update(result)
         return result
 
     async def forget(self) -> dict[str, Any]:
-        return await rpc_call("forget_session", {"provider": self.provider, "session_id": self.session_id})
+        return await rpc_call("forget_session", {"provider": self._provider(), "session_id": self.session_id})
 
     async def get_artifact(self, artifact_id: str, *, output: str | None = None) -> dict[str, Any]:
         return await rpc_call("get_artifact", {"artifact_id": artifact_id, "output": output})
@@ -55,3 +57,6 @@ class WebLLMSession:
     def _update(self, result: dict[str, Any]) -> None:
         self.session_id = result.get("session_id", self.session_id)
         self.conversation_url = result.get("conversation_url", self.conversation_url)
+
+    def _provider(self) -> str:
+        return self.provider

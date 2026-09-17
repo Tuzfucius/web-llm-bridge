@@ -79,3 +79,50 @@ class AgentCliTests(unittest.TestCase):
             main(["debug-snapshot"])
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("invalid choice", diagnostics.getvalue())
+
+    def test_session_commands_resolve_the_default_provider(self) -> None:
+        cases = [
+            (["open"], "open"),
+            (["chat", "--text", "question"], "chat"),
+            (["get-messages"], "get_messages"),
+            (["list-sessions"], "list_sessions"),
+            (["close-session", "--session-id", "saved"], "close_session"),
+            (["forget-session", "--session-id", "saved"], "forget_session"),
+        ]
+        for argv, method in cases:
+            with self.subTest(command=argv[0]), patch(
+                "web_llm_bridge.cli.agent.resolve_provider", return_value="configured"
+            ) as resolve, patch(
+                "web_llm_bridge.cli.agent.rpc_call", AsyncMock(return_value={})
+            ) as rpc:
+                self.assertEqual(main(argv), 0)
+
+            resolve.assert_called_once_with(None)
+            self.assertEqual(rpc.await_args.args[0], method)
+            self.assertEqual(rpc.await_args.args[1]["provider"], "configured")
+
+    def test_open_and_chat_pass_explicit_cli_provider_to_resolver(self) -> None:
+        cases = [
+            (["open", "--provider", "chatgpt"], "open"),
+            (["chat", "--text", "question", "--provider", "chatgpt"], "chat"),
+        ]
+        for argv, method in cases:
+            with self.subTest(command=argv[0]), patch(
+                "web_llm_bridge.cli.agent.resolve_provider", return_value="chatgpt"
+            ) as resolve, patch(
+                "web_llm_bridge.cli.agent.rpc_call", AsyncMock(return_value={})
+            ) as rpc:
+                self.assertEqual(main(argv), 0)
+
+            resolve.assert_called_once_with("chatgpt")
+            self.assertEqual(rpc.await_args.args[0], method)
+            self.assertEqual(rpc.await_args.args[1]["provider"], "chatgpt")
+
+    def test_artifact_command_does_not_resolve_provider(self) -> None:
+        with patch("web_llm_bridge.cli.agent.resolve_provider") as resolve, patch(
+            "web_llm_bridge.cli.agent.rpc_call", AsyncMock(return_value={"id": "artifact"})
+        ) as rpc:
+            self.assertEqual(main(["get-artifact", "--id", "artifact"]), 0)
+
+        resolve.assert_not_called()
+        self.assertEqual(rpc.await_args.args, ("get_artifact", {"artifact_id": "artifact", "output": None}))
