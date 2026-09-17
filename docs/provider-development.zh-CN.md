@@ -5,6 +5,12 @@
 Provider 将统一 Session 操作映射到用户已经在浏览器中认证的网站。新增 Provider 前，
 必须确认网站允许预期自动化，且用户已经明确授权。
 
+项目可以通过根目录的 `.web-llm-bridge.json` 选择已经注册的 Provider。该文件只包含
+`version` 和 `default_provider`，不能定义 host、URL、selector、Adapter、凭据或新的
+Provider。调用方按 `--provider`/显式 API 参数、最近父目录配置、内置 `chatgpt` 的顺序
+解析；只有在未提供显式 Provider、项目配置参与解析时，配置错误或未注册的 Provider
+才会明确失败，不能静默回退。
+
 ## 不可违反的边界
 
 ### Python：仅静态定义

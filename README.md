@@ -107,6 +107,41 @@ cat prompt.md | web-llm-agent chat --stdin --json
 
 Use `--session-id SESSION_ID` when an explicit persisted session is preferred.
 
+### Project Provider Configuration
+
+Agent commands and the Python `WebLLMSession` API resolve the Provider in this order:
+
+```text
+--provider (or an explicit API argument)
+    > .web-llm-bridge.json in the nearest parent directory
+    > built-in default: chatgpt
+```
+
+Create `.web-llm-bridge.json` in a project root when a project should select a
+different registered Provider:
+
+```json
+{
+  "version": 1,
+  "default_provider": "chatgpt"
+}
+```
+
+For example, an explicit choice takes precedence and validates the named
+registered Provider without reading the project file. This lets an invocation
+continue even when the nearest project configuration is malformed:
+
+```console
+web-llm-agent chat --provider chatgpt --text "hello"
+```
+
+The file only selects a Provider already registered by the bridge. It cannot
+define hosts, URLs, adapters, credentials, or new Providers. When project
+configuration participates in resolution, invalid JSON, unsupported versions,
+invalid values, and unknown Provider IDs are reported as errors rather than
+silently falling back to ChatGPT. An explicit `--provider` or Python API
+`provider` argument bypasses that file.
+
 ## Agent Usage
 
 Any local agent that can execute shell commands, write stdin, and read stdout can use Web LLM Bridge, including Codex, Claude Code, OpenClaw, Hermes, and custom agents.

@@ -9,6 +9,7 @@ import sys
 from typing import Any
 
 from ..client import rpc_call
+from ..config import resolve_provider
 from ..errors import WebLLMBridgeError
 
 
@@ -20,31 +21,31 @@ def _parser() -> argparse.ArgumentParser:
     group.add_argument("--new", action="store_true", help="Create a new conversation.")
     group.add_argument("--url", help="Open or restore this conversation URL.")
     group.add_argument("--session-id", help="Restore a persisted session by ID.")
-    opened.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
+    opened.add_argument("--provider", default=None, help="Provider ID (defaults to the project configuration).")
     opened.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
     chat = commands.add_parser("chat", help="Send one prompt and wait for the response.")
     text_source = chat.add_mutually_exclusive_group(required=True)
     text_source.add_argument("--text", help="Prompt text.")
     text_source.add_argument("--stdin", action="store_true", help="Read the prompt from stdin.")
     chat.add_argument("--session-id", help="Target session ID; defaults to the active session.")
-    chat.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
+    chat.add_argument("--provider", default=None, help="Provider ID (defaults to the project configuration).")
     chat.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
     history = commands.add_parser("get-messages", help="Read messages from the bound browser tab.")
     history.add_argument("--limit", type=int, default=5, help="Maximum messages to return (default: 5).")
     history.add_argument("--all", action="store_true", dest="full", help="Return the complete collected history.")
     history.add_argument("--session-id", help="Target session ID; defaults to the active session.")
-    history.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
+    history.add_argument("--provider", default=None, help="Provider ID (defaults to the project configuration).")
     history.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
     listed = commands.add_parser("list-sessions", help="List persisted sessions.")
-    listed.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
+    listed.add_argument("--provider", default=None, help="Provider ID (defaults to the project configuration).")
     listed.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
     closed = commands.add_parser("close-session", help="Close the browser tab bound to a session.")
     closed.add_argument("--session-id", required=True, help="Target session ID.")
-    closed.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
+    closed.add_argument("--provider", default=None, help="Provider ID (defaults to the project configuration).")
     closed.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
     forgotten = commands.add_parser("forget-session", help="Delete persisted session metadata.")
     forgotten.add_argument("--session-id", required=True, help="Target session ID.")
-    forgotten.add_argument("--provider", default="chatgpt", help="Provider ID (default: chatgpt).")
+    forgotten.add_argument("--provider", default=None, help="Provider ID (defaults to the project configuration).")
     forgotten.add_argument("--json", action="store_true", help="Write one JSON object to stdout.")
     artifact = commands.add_parser("get-artifact", help="Materialize a previously discovered Artifact.")
     artifact.add_argument("--id", required=True, dest="artifact_id", help="Artifact ID.")
@@ -54,22 +55,23 @@ def _parser() -> argparse.ArgumentParser:
 
 
 async def _run(args: argparse.Namespace) -> dict[str, Any]:
+    provider = resolve_provider(args.provider) if args.command != "get-artifact" else None
     if args.command == "open":
-        return await rpc_call("open", {"provider": args.provider, "new": args.new, "url": args.url, "session_id": args.session_id})
+        return await rpc_call("open", {"provider": provider, "new": args.new, "url": args.url, "session_id": args.session_id})
     if args.command == "chat":
         text = sys.stdin.read() if args.stdin else args.text
         def progress(event: dict[str, Any]) -> None:
             print(f"[{event.get('phase', 'working')}]", file=sys.stderr, flush=True)
-        return await rpc_call("chat", {"provider": args.provider, "session_id": args.session_id, "text": text}, progress=progress)
+        return await rpc_call("chat", {"provider": provider, "session_id": args.session_id, "text": text}, progress=progress)
     if args.command == "get-messages":
-        return await rpc_call("get_messages", {"provider": args.provider, "session_id": args.session_id, "limit": args.limit, "full": args.full})
+        return await rpc_call("get_messages", {"provider": provider, "session_id": args.session_id, "limit": args.limit, "full": args.full})
     if args.command == "close-session":
-        return await rpc_call("close_session", {"provider": args.provider, "session_id": args.session_id})
+        return await rpc_call("close_session", {"provider": provider, "session_id": args.session_id})
     if args.command == "forget-session":
-        return await rpc_call("forget_session", {"provider": args.provider, "session_id": args.session_id})
+        return await rpc_call("forget_session", {"provider": provider, "session_id": args.session_id})
     if args.command == "get-artifact":
         return await rpc_call("get_artifact", {"artifact_id": args.artifact_id, "output": args.output})
-    return await rpc_call("list_sessions", {"provider": args.provider})
+    return await rpc_call("list_sessions", {"provider": provider})
 
 
 def _emit_error(args: argparse.Namespace, *, code: str, message: str, safe_to_retry: bool = False) -> int:
