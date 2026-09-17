@@ -185,7 +185,7 @@
               }, retryIntervalMs);
             }
           } catch (error) {
-            finishFailure(normalizeReloadError(error, tabId));
+            finishFailure(await normalizeReloadError(error, tabId));
           }
         };
         onUpdated.addListener(handleUpdated);

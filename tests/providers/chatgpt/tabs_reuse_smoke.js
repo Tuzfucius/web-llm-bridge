@@ -10,6 +10,8 @@ function makeHarness(initialTabs, options = {}) {
   const updatedListeners = new Set();
   const removedListeners = new Set();
   const stats = { reload: [], create: [], events: [], pingStatuses: [] };
+  let reloadStarted = false;
+  let reloadReturned = false;
   let nextId = Math.max(0, ...tabs.keys()) + 1;
   const context = {
     globalThis: null,
@@ -19,6 +21,7 @@ function makeHarness(initialTabs, options = {}) {
     chrome: {
       tabs: {
         get: async (id) => {
+          if (options.failGetDuringReloadPoll && reloadStarted && reloadReturned) throw new Error("No tab with id");
           const tab = tabs.get(id);
           if (!tab) throw new Error("No tab with id");
           return { ...tab };
@@ -32,6 +35,7 @@ function makeHarness(initialTabs, options = {}) {
             stats.events.push("complete:stale");
             for (const listener of updatedListeners) listener(id, { status: "complete" }, { ...tab });
           }
+          reloadStarted = true;
           tab.status = "loading";
           tab.ready = false;
           stats.events.push("loading");
@@ -56,6 +60,7 @@ function makeHarness(initialTabs, options = {}) {
               if (current) current.ready = true;
             }, options.readyDelayMs || 5);
           }
+          reloadReturned = true;
         },
         create: async ({ url }) => {
           const id = nextId++;
@@ -177,6 +182,18 @@ async function main() {
     assert.equal(result.tab_id, 20);
     assert.deepEqual(harness.stats.events, ["loading", "complete"]);
     assert.deepEqual(harness.stats.reload, [20]);
+  }
+  {
+    const harness = makeHarness([{ id: 20, url: "https://chatgpt.com/c/abc" }], { failGetDuringReloadPoll: true });
+    await assert.rejects(
+      () => harness.bridgeTabs.attach({ provider: "chatgpt", url: "https://chatgpt.com/c/abc" }),
+      (error) => {
+        assert.equal(error.code, "TAB_CLOSED");
+        return true;
+      },
+    );
+    assert.equal(harness.listeners.updated.size, 0);
+    assert.equal(harness.listeners.removed.size, 0);
   }
   {
     const harness = makeHarness([{ id: 20, url: "https://chatgpt.com/c/abc" }], { closeDuringReload: true });
