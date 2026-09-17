@@ -1,7 +1,8 @@
 # Plugin Manifest
 
-This directory contains the validation-ready Codex plugin manifest. The
-manifest registers the Bridge-backed review Skill. Codex discovers the
-plugin-local default `hooks/hooks.json`; its commands resolve scripts through
-`${PLUGIN_ROOT}`. Hooks are local, bounded decision helpers; provider
-communication remains in the Bridge review driver.
+This directory contains the Codex plugin manifest. The manifest exposes a
+user-invoked review Skill: explicit ChatGPT/Web LLM Bridge review intent and a
+conversation URL or session ID are required. Codex discovers the plugin-local
+`hooks/hooks.json`; its production configuration registers only the static Stop
+gate. Hooks are local, bounded decision helpers; provider communication remains
+in the Bridge review driver.

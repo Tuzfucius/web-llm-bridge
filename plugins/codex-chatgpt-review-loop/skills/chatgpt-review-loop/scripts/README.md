@@ -1,13 +1,20 @@
-# Review Loop Scripts
+# Review loop scripts
 
-这些脚本构成 Bridge-backed ChatGPT Review 的确定性边界：
+These scripts form the deterministic boundary of the Bridge-backed review
+workflow:
 
-- `build_review_prompt.py` 从干净的 Git HEAD 收集审查材料，并加入
-  Review Context。
-- `parse_review.py` 严格解析 PASS/REVISE 和 Codex 修改提示词 marker。
-- `parse_review_context.py` 严格提取 Original task、Implementation summary
-  和 Tests 三个 section。
-- `review_state.py` 将会话、轮次和 at-most-once 状态保存到 `.git` 下。
-- `review_driver.py` 复用 `WebLLMClient` 完成 smoke 与 review 流程，并在
-  unsafe/unknown delivery 时 fail closed；正式 review 强制完整
-  `REVIEW_CONTEXT`，并校验 active REVISE cycle 的 Original task 不漂移。
+- `review_activation.py` manages the repository-local, explicit-target
+  activation. It is separate from review state and stores no credentials.
+- `build_review_prompt.py` collects clean Git HEAD material and adds the review
+  context.
+- `parse_review.py` strictly parses PASS/REVISE and Codex prompt markers.
+- `parse_review_context.py` extracts the three required context sections and
+  rejects duplicates or missing sections.
+- `review_state.py` persists session, round, task hash, cycle identity, and
+  at-most-once recovery state below `.git/codex-chatgpt-review/state.json`.
+- `review_driver.py` reuses `WebLLMClient` for smoke and review operations. A
+  new review cycle requires an explicit conversation URL or Bridge session ID;
+  active REVISE/recovery cycles reuse only their current state target.
+
+The driver owns the existing bounded protocol and never stores cookies,
+tokens, or browser debugging information.

@@ -277,21 +277,34 @@ def _prompt_request(request_id: str) -> tuple[str, str]:
     return marker, text
 
 
-async def _open_session(client: Any, state: dict[str, Any]) -> tuple[str, str | None]:
-    saved_session = state.get("session_id")
-    saved_url = state.get("conversation_url")
-    if saved_session:
-        try:
-            result = await client.open(provider=REVIEW_PROVIDER, session_id=saved_session)
-            return _open_metadata(result, saved_session, saved_url)
-        except Exception as error:
-            if _error_code(error) != "SESSION_NOT_FOUND" or not saved_url:
-                raise
-    if saved_url:
-        result = await client.open(provider=REVIEW_PROVIDER, url=saved_url)
-        return _open_metadata(result, saved_session, saved_url)
-    result = await client.open(provider=REVIEW_PROVIDER, new=True)
-    return _open_metadata(result)
+async def _open_session(
+    client: Any,
+    *,
+    conversation_url: str | None = None,
+    session_id: str | None = None,
+    fallback_url: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Open an explicitly selected target, never a new conversation."""
+
+    if conversation_url is not None and session_id is not None:
+        raise DriverError("INVALID_ARGUMENT", "conversation_url and session_id are mutually exclusive")
+    if conversation_url is not None:
+        result = await client.open(provider=REVIEW_PROVIDER, url=conversation_url)
+        return _open_metadata(result, None, conversation_url)
+    if session_id is None:
+        raise DriverError(
+            "REVIEW_TARGET_REQUIRED",
+            "A ChatGPT conversation URL or Web LLM Bridge session ID is required for a new review cycle.",
+        )
+
+    try:
+        result = await client.open(provider=REVIEW_PROVIDER, session_id=session_id)
+        return _open_metadata(result, session_id, fallback_url)
+    except Exception as error:
+        if _error_code(error) != "SESSION_NOT_FOUND" or not fallback_url:
+            raise
+    result = await client.open(provider=REVIEW_PROVIDER, url=fallback_url)
+    return _open_metadata(result, session_id, fallback_url)
 
 
 def _review_output(status: str, *, ok: bool = True, sha: str | None = None, session_id: str | None = None, conversation_url: str | None = None, round_number: int | None = None, **extra: Any) -> dict[str, Any]:
@@ -316,6 +329,8 @@ async def run_review(
     max_rounds: int = MAX_ROUNDS,
     require_push: bool = False,
     review_context: Mapping[str, str] | None = None,
+    conversation_url: str | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Run one deterministic external review attempt."""
 
@@ -323,6 +338,18 @@ async def run_review(
     if context_error is not None:
         return context_error
     assert normalized_context is not None
+
+    if conversation_url is not None and session_id is not None:
+        return {
+            "ok": False,
+            "status": "INVALID_ARGUMENT",
+            "code": "INVALID_ARGUMENT",
+            "message": "conversation_url and session_id are mutually exclusive",
+        }
+    if conversation_url is not None and not conversation_url.strip():
+        return {"ok": False, "status": "INVALID_ARGUMENT", "code": "INVALID_ARGUMENT", "message": "conversation_url must be non-empty"}
+    if session_id is not None and not session_id.strip():
+        return {"ok": False, "status": "INVALID_ARGUMENT", "code": "INVALID_ARGUMENT", "message": "session_id must be non-empty"}
 
     root = _repo_root(repo_root)
     (
@@ -436,7 +463,11 @@ async def run_review(
         if not client:
             (ensure_broker_fn or default_ensure)()
             client = Client()
-        session_id, conversation_url = await _open_session(client, state)
+        session_id, conversation_url = await _open_session(
+            client,
+            session_id=state.get("session_id"),
+            fallback_url=state.get("conversation_url"),
+        )
         pending = str(state["pending_request_id"])
         if pending.startswith("prompt:"):
             request_id = pending.removeprefix("prompt:")
@@ -524,10 +555,33 @@ async def run_review(
         save_state(root, state)
         return {"ok": False, "status": "MAX_ROUNDS", "code": "MAX_ROUNDS", "sha": sha, "round": int(state.get("round", 0))}
 
+    # Completed cycles cannot donate their target to a new task. Active REVISE
+    # cycles may reopen their already-bound target after Codex commits a fix.
+    if not active_cycle and conversation_url is None and session_id is None:
+        return _review_output(
+            "REVIEW_TARGET_REQUIRED",
+            ok=False,
+            code="REVIEW_TARGET_REQUIRED",
+            sha=sha,
+            round_number=int(state.get("round", 0)),
+            message="A ChatGPT conversation URL or Web LLM Bridge session ID is required for a new review cycle.",
+        )
+
     if not client:
         (ensure_broker_fn or default_ensure)()
         client = Client()
-    session_id, conversation_url = await _open_session(client, state)
+    if active_cycle:
+        session_id, conversation_url = await _open_session(
+            client,
+            session_id=state.get("session_id"),
+            fallback_url=state.get("conversation_url"),
+        )
+    else:
+        session_id, conversation_url = await _open_session(
+            client,
+            conversation_url=conversation_url,
+            session_id=session_id,
+        )
     request_id = str(context["request_id"])
     state.update(
         {
@@ -718,6 +772,9 @@ def main(argv: list[str] | None = None) -> int:
     review.add_argument("--require-push", action="store_true")
     review.add_argument("--max-rounds", type=int, default=MAX_ROUNDS)
     review.add_argument("--context-file", type=Path, required=True)
+    target = review.add_mutually_exclusive_group()
+    target.add_argument("--conversation-url")
+    target.add_argument("--session-id")
     args = parser.parse_args(argv)
     try:
         if args.command == "smoke":
@@ -729,6 +786,8 @@ def main(argv: list[str] | None = None) -> int:
                     max_rounds=args.max_rounds,
                     require_push=args.require_push,
                     review_context=_read_context_file(args.context_file),
+                    conversation_url=args.conversation_url,
+                    session_id=args.session_id,
                 )
             )
         print(json.dumps(result, ensure_ascii=False))

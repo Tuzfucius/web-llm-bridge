@@ -1,10 +1,13 @@
 # Codex Hooks
 
-`hooks.json` registers the SessionStart and Stop commands for the plugin. Both
-commands resolve their script through `${PLUGIN_ROOT}` because Codex runs hook
-commands with the current workspace as cwd. `session_start.py` contributes the
-development/review lifecycle policy; `stop_review.py` only returns a Codex stop
-decision and copies a complete review-context block into the continuation
-reason. Stop markers must be the final non-empty line; inline mentions and
-fenced code do not trigger a continuation. Neither hook performs provider
-communication or persists review state.
+`hooks.json` registers only the static Stop command for the production plugin.
+It resolves `stop_review.py` through `${PLUGIN_ROOT}` because Codex runs hook
+commands with the current workspace as cwd. The legacy `session_start.py`
+script is retained for experiments but is intentionally not registered, so
+installing the plugin does not inject a review lifecycle into ordinary tasks.
+
+`stop_review.py` is a lightweight, fail-closed gate. It returns `{}` unless the
+final non-empty line is `@@REVIEW_READY@@` and the message also contains one
+valid activation marker plus a complete context block matching the repository
+local activation file. It never performs provider communication, browser I/O,
+or Git operations on the default path.
