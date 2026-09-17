@@ -45,6 +45,55 @@ def test_state_round_trip_and_git_scoped_atomic_write(tmp_path):
     assert list(path.parent.glob("*.tmp")) == []
 
 
+def test_activation_arm_status_consume_and_clear(tmp_path):
+    activation = load("review_activation")
+    repo = make_repo(tmp_path)
+    armed = activation.arm(
+        repo,
+        task="  implement external review\n",
+        conversation_url="https://chatgpt.com/c/test",
+    )
+    assert armed["version"] == 1
+    assert armed["armed"] is True
+    assert armed["target_kind"] == "conversation_url"
+    assert activation.load_activation(repo) == armed
+    assert list(activation.activation_path(repo).parent.glob("*.tmp")) == []
+
+    consumed = activation.consume(repo, armed["activation_id"])
+    assert consumed["armed"] is False
+    assert consumed["consumed"] is True
+    assert activation.clear(repo) is True
+    assert activation.load_activation(repo) is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"version": 2},
+        {"version": 1, "activation_id": "bad", "target_kind": "session_id", "target_value": "a", "task_hash": "0" * 24, "armed": True},
+        {"version": 1, "activation_id": "00000000-0000-4000-8000-000000000000", "target_kind": "bad", "target_value": "a", "task_hash": "0" * 24, "armed": True},
+    ],
+)
+def test_activation_invalid_schema_fails_closed(tmp_path, payload):
+    activation = load("review_activation")
+    repo = make_repo(tmp_path)
+    path = activation.activation_path(repo)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(activation.ActivationError):
+        activation.load_activation(repo, required=True)
+
+
+def test_activation_rejects_ambiguous_or_missing_target(tmp_path):
+    activation = load("review_activation")
+    repo = make_repo(tmp_path)
+    with pytest.raises(activation.ActivationError):
+        activation.arm(repo, task="task")
+    with pytest.raises(activation.ActivationError):
+        activation.arm(repo, task="task", conversation_url="https://chatgpt.com/c/test", session_id="abc")
+
+
 def test_v1_state_migrates_task_hash_and_active_cycle_without_resend(tmp_path):
     state = load("review_state")
     repo = make_repo(tmp_path)
@@ -103,10 +152,9 @@ def test_future_or_invalid_state_version_is_rejected(tmp_path, version):
 
 def test_skill_does_not_modify_after_final_revise_round():
     skill = SKILL_PATH.read_text(encoding="utf-8")
-    assert "status == REVISE`" in skill
-    assert "status == MAX_ROUNDS_REVISE" in skill
-    assert "round < MAX_ROUNDS" not in skill
-    assert "round >= MAX_ROUNDS" not in skill
+    assert "`REVISE`:" in skill
+    assert "`MAX_ROUNDS_REVISE`:" in skill
+    assert "send a fourth request" in skill
     assert "do not execute the" in skill
 
 
