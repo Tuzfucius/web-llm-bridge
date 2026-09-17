@@ -83,6 +83,8 @@ def test_activation_invalid_schema_fails_closed(tmp_path, payload):
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(activation.ActivationError):
         activation.load_activation(repo, required=True)
+    with pytest.raises(activation.ActivationError):
+        activation.clear(repo)
 
 
 def test_activation_rejects_ambiguous_or_missing_target(tmp_path):

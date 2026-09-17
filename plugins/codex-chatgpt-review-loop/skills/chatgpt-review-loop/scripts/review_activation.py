@@ -174,8 +174,14 @@ def consume(repo_root: str | os.PathLike[str], activation_id: str | None = None)
 
 
 def clear(repo_root: str | os.PathLike[str]) -> bool:
+    path = activation_path(repo_root)
+    if not path.exists():
+        return False
+    # Do not silently delete an unreadable authorization record. Invalid or
+    # future-version state must fail closed and remain available for recovery.
+    load_activation(repo_root, required=True)
     try:
-        activation_path(repo_root).unlink()
+        path.unlink()
     except FileNotFoundError:
         return False
     return True
