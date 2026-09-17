@@ -105,8 +105,15 @@ python <plugin-root>/skills/chatgpt-review-loop/scripts/review_driver.py review 
 Use `--session-id "<id>"` instead for a Bridge session activation. The two
 options are mutually exclusive. A first review cycle without either option
 returns `REVIEW_TARGET_REQUIRED` and must not contact the Bridge. Once the
-driver has successfully bound the target, clear the activation. The active
-cycle state retains the resolved target for recovery and REVISE rounds.
+driver has successfully bound the target, clear the activation before
+continuing the loop:
+
+```bash
+python <plugin-root>/skills/chatgpt-review-loop/scripts/review_activation.py clear
+```
+
+The active cycle state retains the resolved target for recovery and REVISE
+rounds.
 
 The driver owns the existing bounded state machine (`PASS`, `REVISE`,
 `MAX_ROUNDS_REVISE`, `MAX_ROUNDS`, `NO_CODE_CHANGE`,
