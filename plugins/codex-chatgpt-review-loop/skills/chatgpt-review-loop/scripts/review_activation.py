@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import urlparse
@@ -130,8 +131,66 @@ def load_activation(repo_root: str | os.PathLike[str], *, required: bool = False
     return _validate_activation(value)
 
 
+def _activation_lock_path(repo_root: str | os.PathLike[str]) -> Path:
+    return activation_path(repo_root).with_name("activation.lock")
+
+
+def _lock_handle(handle: Any) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+                os.fsync(handle.fileno())
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    except (ImportError, OSError) as error:
+        raise ActivationError(f"cannot acquire activation lock: {error}") from error
+
+
+def _unlock_handle(handle: Any) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except (ImportError, OSError) as error:
+        raise ActivationError(f"cannot release activation lock: {error}") from error
+
+
+@contextmanager
+def _activation_lock(repo_root: str | os.PathLike[str]):
+    """Serialize Git-scoped activation mutations with an OS advisory lock."""
+    path = _activation_lock_path(repo_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("a+b")
+    except OSError as error:
+        raise ActivationError(f"cannot open activation lock: {error}") from error
+    try:
+        _lock_handle(handle)
+        try:
+            yield
+        finally:
+            _unlock_handle(handle)
+    finally:
+        handle.close()
+
+
 def save_activation(repo_root: str | os.PathLike[str], activation: Mapping[str, Any]) -> Path:
-    """Validate and atomically persist an activation file."""
+    """Atomically replace an activation file; read-modify-write callers lock."""
     value, path = _validate_activation(activation), activation_path(repo_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(value, ensure_ascii=True, sort_keys=True, indent=2) + "\n"
@@ -160,38 +219,41 @@ def arm(repo_root: str | os.PathLike[str], *, task: str, conversation_url: str |
         target_kind, target_value = "session_id", str(session_id).strip()
         if not target_value or any(character.isspace() for character in target_value):
             raise ActivationError("session ID must be non-empty and contain no whitespace")
-    existing = load_activation(repo_root)
-    if existing is not None and existing["armed"]:
-        raise ActivationConflict(f"review activation already armed: {existing['activation_id']}")
-    activation = {"version": ACTIVATION_VERSION, "activation_id": str(uuid.uuid4()),
-                  "target_kind": target_kind, "target_value": target_value,
-                  "task_hash": task_hash(task), "armed": True}
-    save_activation(repo_root, activation)
-    return activation
+    with _activation_lock(repo_root):
+        existing = load_activation(repo_root)
+        if existing is not None and existing["armed"]:
+            raise ActivationConflict(f"review activation already armed: {existing['activation_id']}")
+        activation = {"version": ACTIVATION_VERSION, "activation_id": str(uuid.uuid4()),
+                      "target_kind": target_kind, "target_value": target_value,
+                      "task_hash": task_hash(task), "armed": True}
+        save_activation(repo_root, activation)
+        return activation
 
 
 def consume(repo_root: str | os.PathLike[str], activation_id: str | None = None) -> dict[str, Any]:
-    activation = load_activation(repo_root, required=True)
-    assert activation is not None
-    if activation_id is not None and activation_id != activation["activation_id"]:
-        raise ActivationError("activation_id does not match")
-    activation["armed"], activation["consumed"] = False, True
-    save_activation(repo_root, activation)
-    return activation
+    with _activation_lock(repo_root):
+        activation = load_activation(repo_root, required=True)
+        assert activation is not None
+        if activation_id is not None and activation_id != activation["activation_id"]:
+            raise ActivationError("activation_id does not match")
+        activation["armed"], activation["consumed"] = False, True
+        save_activation(repo_root, activation)
+        return activation
 
 
 def clear(repo_root: str | os.PathLike[str]) -> bool:
-    path = activation_path(repo_root)
-    if not path.exists():
-        return False
-    # Do not silently delete an unreadable authorization record. Invalid or
-    # future-version state must fail closed and remain available for recovery.
-    load_activation(repo_root, required=True)
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return False
-    return True
+    with _activation_lock(repo_root):
+        path = activation_path(repo_root)
+        if not path.exists():
+            return False
+        # Do not silently delete an unreadable authorization record. Invalid or
+        # future-version state must fail closed and remain available for recovery.
+        load_activation(repo_root, required=True)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        return True
 
 
 def _task_from_args(args: argparse.Namespace) -> str:
