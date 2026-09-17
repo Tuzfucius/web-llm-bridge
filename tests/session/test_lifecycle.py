@@ -4,6 +4,7 @@ import unittest
 from web_llm_bridge.providers.base import ProviderDefinition
 from web_llm_bridge.artifacts.model import make_artifact_id
 from web_llm_bridge.artifacts.store import ArtifactStore
+from web_llm_bridge.providers.registry import ProviderRegistry
 from web_llm_bridge.session.manager import SessionManager
 from web_llm_bridge.session.store import SessionStore
 
@@ -40,6 +41,65 @@ class FakeTransport:
 
 
 class SessionLifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def _open_legacy_chatgpt(self, current_url: str, requested_url: str) -> tuple[SessionManager, dict, FakeTransport]:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        store = SessionStore(directory.name)
+        store.upsert(
+            session_id="legacy-chatgpt",
+            provider="chatgpt",
+            tab_id=10,
+            current_url=current_url,
+            active=True,
+        )
+        transport = FakeTransport()
+        manager = SessionManager(store, ProviderRegistry(), transport, ArtifactStore(directory.name + "/artifacts"))
+        opened = await manager.open(provider="chatgpt", url=requested_url)
+        return manager, opened, transport
+
+    async def test_open_matches_legacy_www_chatgpt_session(self):
+        manager, opened, transport = await self._open_legacy_chatgpt(
+            "https://www.chatgpt.com/c/abc",
+            "https://chatgpt.com/c/abc",
+        )
+        self.assertEqual(opened["session_id"], "legacy-chatgpt")
+        self.assertEqual(len(manager.store.list("chatgpt")), 1)
+        self.assertEqual(len(transport.calls), 1)
+
+    async def test_open_matches_reverse_chatgpt_host(self):
+        _manager, opened, transport = await self._open_legacy_chatgpt(
+            "https://chatgpt.com/c/abc",
+            "https://www.chatgpt.com/c/abc",
+        )
+        self.assertEqual(opened["session_id"], "legacy-chatgpt")
+        self.assertEqual(len(transport.calls), 1)
+
+    async def test_open_matches_legacy_query_and_trailing_slash(self):
+        _manager, opened, transport = await self._open_legacy_chatgpt(
+            "https://www.chatgpt.com/c/abc/?model=x",
+            "https://chatgpt.com/c/abc",
+        )
+        self.assertEqual(opened["session_id"], "legacy-chatgpt")
+        self.assertEqual(len(transport.calls), 1)
+
+    async def test_open_skips_corrupt_legacy_url(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = SessionStore(directory)
+            store.upsert(
+                session_id="corrupt-session",
+                provider="chatgpt",
+                tab_id=10,
+                current_url="invalid-url",
+                active=True,
+            )
+            transport = FakeTransport()
+            manager = SessionManager(store, ProviderRegistry(), transport, ArtifactStore(directory + "/artifacts"))
+            opened = await manager.open(provider="chatgpt", url="https://chatgpt.com/c/abc")
+            self.assertEqual(store.get("corrupt-session")["current_url"], "invalid-url")
+
+        self.assertNotEqual(opened["session_id"], "corrupt-session")
+        self.assertEqual(len(transport.calls), 1)
+
     async def test_broker_restart_does_not_restore_active_binding(self):
         with tempfile.TemporaryDirectory() as directory:
             store = SessionStore(directory)

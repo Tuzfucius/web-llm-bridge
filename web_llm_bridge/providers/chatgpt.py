@@ -18,4 +18,5 @@ CHATGPT_PROVIDER = ProviderDefinition(
         "latex": True,
         "persistentConversation": True,
     },
+    canonical_host="chatgpt.com",
 )

@@ -44,7 +44,18 @@
     normalizeUrl(value) {
       if (!this.matchesUrl(value)) return null;
       const url = new URL(value); const path = url.pathname || "/";
-      return `${url.origin}${path === "/" ? "/" : path.replace(/\/+$/, "")}`;
+      return `https://chatgpt.com${path === "/" ? "/" : path.replace(/\/+$/, "")}`;
+    },
+    getConversationIdentity(value) {
+      if (!this.matchesUrl(value)) return null;
+      const path = (new URL(value).pathname || "/").replace(/\/+$/, "") || "/";
+      if (path === "/") return { kind: "root", id: null };
+      const match = path.match(/^\/c\/([^/]+)$/);
+      if (match) return { kind: "conversation", id: match[1] };
+      return { kind: "page", id: this.normalizeUrl(value) };
+    },
+    isRootTarget(value) {
+      return this.getConversationIdentity(value)?.kind === "root";
     },
   };
 })(globalThis);

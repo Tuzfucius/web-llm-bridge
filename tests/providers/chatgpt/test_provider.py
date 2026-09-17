@@ -7,3 +7,4 @@ class ChatGPTProviderTests(unittest.TestCase):
     def test_definition_carries_capabilities_and_normalizes_url(self) -> None:
         self.assertTrue(CHATGPT_PROVIDER.capabilities["fullHistory"])
         self.assertEqual(CHATGPT_PROVIDER.normalize_url("https://chatgpt.com/c/a/?x=1"), "https://chatgpt.com/c/a")
+        self.assertEqual(CHATGPT_PROVIDER.normalize_url("https://www.chatgpt.com/c/a"), "https://chatgpt.com/c/a")
