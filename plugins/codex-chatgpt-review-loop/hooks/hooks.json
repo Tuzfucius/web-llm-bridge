@@ -1,0 +1,27 @@
+{
+  "$schema": "https://developers.openai.com/codex/hooks.schema.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/session_start.py\"",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}\\hooks\\session_start.py\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/stop_review.py\"",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}\\hooks\\stop_review.py\""
+          }
+        ]
+      }
+    ]
+  }
+}
