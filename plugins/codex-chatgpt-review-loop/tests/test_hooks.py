@@ -94,5 +94,7 @@ def test_plugin_metadata_uses_project_policy_urls_only():
     manifest = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     interface = manifest["interface"]
     assert interface["websiteURL"] == "https://github.com/Tuzfucius/web-llm-bridge"
+    assert "initial Stop-hook handoff" in interface["longDescription"]
+    assert "subsequent REVISE rounds are driven directly by the Skill" in interface["longDescription"]
     assert "privacyPolicyURL" not in interface
     assert "termsOfServiceURL" not in interface

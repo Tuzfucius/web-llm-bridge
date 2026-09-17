@@ -15,6 +15,10 @@ class StateError(RuntimeError):
     code = "STATE_CORRUPT"
 
 
+class UnsupportedStateVersion(StateError):
+    code = "UNSUPPORTED_STATE_VERSION"
+
+
 def state_path(repo_root: str | os.PathLike[str]) -> Path:
     """Return the state file below *repo_root* (never the process cwd)."""
     import subprocess
@@ -46,9 +50,12 @@ def _has_active_cycle(state: Mapping[str, Any]) -> bool:
 
 
 def _migrate(value: Mapping[str, Any]) -> dict[str, Any]:
+    version = value.get("version", 1)
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1 or version > STATE_VERSION:
+        raise UnsupportedStateVersion(f"unsupported review state version: {version!r}")
+
     result = default_state()
     result.update(value)
-    version = value.get("version", 1)
     if version == 1:
         # Version 1 stored the task hash in cycle_id. Preserve that value for
         # an active request so recovery remains at-most-once; inactive state
@@ -60,8 +67,6 @@ def _migrate(value: Mapping[str, Any]) -> dict[str, Any]:
         else:
             result["task_hash"] = None
             result["cycle_id"] = None
-        result["version"] = STATE_VERSION
-    elif version != STATE_VERSION:
         result["version"] = STATE_VERSION
     return result
 

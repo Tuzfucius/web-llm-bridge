@@ -66,11 +66,14 @@ for the deterministic request marker and returns `REVIEW_DELIVERY_UNKNOWN`
 instead of blindly resending a request it cannot prove was not delivered.
 
 SessionStart injects the lifecycle policy for producing context and
-`@@REVIEW_READY@@`. Stop only blocks on a standalone line containing that
-sentinel; it allows only a standalone `@@WEB_REVIEW_PASS@@` line and never
-contacts the Bridge. Unknown prompt delivery is recovered only from a user
-request marker in conversation history; successful prompt recovery restores
-`last_status=REVISE` and same-SHA calls return `NO_CODE_CHANGE`.
+`@@REVIEW_READY@@`. Stop only blocks on a final non-empty line containing that
+sentinel; it allows only a final non-empty `@@WEB_REVIEW_PASS@@` line and never
+contacts the Bridge. After the initial handoff, the Skill drives subsequent
+REVISE rounds directly and never routes them through Stop again. A REVISE at
+the maximum round is reported without executing its prompt. Unknown prompt
+delivery is recovered only from a user request marker in conversation history;
+successful prompt recovery restores `last_status=REVISE` and same-SHA calls
+return `NO_CODE_CHANGE`.
 
 ## Live test status
 

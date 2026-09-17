@@ -8,6 +8,7 @@ import pytest
 
 ROOT = Path(__file__).parents[1]
 SCRIPTS = ROOT / "skills" / "chatgpt-review-loop" / "scripts"
+SKILL_PATH = ROOT / "skills" / "chatgpt-review-loop" / "SKILL.md"
 
 
 def load(name):
@@ -38,7 +39,9 @@ def test_state_round_trip_and_git_scoped_atomic_write(tmp_path):
     repo = make_repo(tmp_path)
     path = state.save_state(repo, {**state.default_state(), "round": 2, "last_status": "REVISE"})
     assert path == repo / ".git" / "codex-chatgpt-review" / "state.json"
-    assert state.load_state(repo)["round"] == 2
+    loaded = state.load_state(repo)
+    assert loaded["version"] == 2
+    assert loaded["round"] == 2
     assert list(path.parent.glob("*.tmp")) == []
 
 
@@ -84,6 +87,26 @@ def test_state_corrupt_json_is_structured_error(tmp_path):
     with pytest.raises(state.StateError) as error:
         state.load_state(repo)
     assert error.value.code == "STATE_CORRUPT"
+
+
+@pytest.mark.parametrize("version", [3, "3", True, None, -1])
+def test_future_or_invalid_state_version_is_rejected(tmp_path, version):
+    state = load("review_state")
+    repo = make_repo(tmp_path)
+    path = state.state_path(repo)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": version}), encoding="utf-8")
+    with pytest.raises(state.UnsupportedStateVersion) as error:
+        state.load_state(repo)
+    assert error.value.code == "UNSUPPORTED_STATE_VERSION"
+
+
+def test_skill_does_not_modify_after_final_revise_round():
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    assert "status == REVISE` with `round < MAX_ROUNDS" in skill
+    assert "status == REVISE` with `round >= MAX_ROUNDS" in skill
+    assert "do not execute the" in skill
+    assert "MAX_ROUNDS_REVISE" in skill
 
 
 @pytest.mark.parametrize(
