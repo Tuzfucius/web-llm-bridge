@@ -8,6 +8,7 @@ import pytest
 ROOT = Path(__file__).parents[1]
 DRIVER_PATH = ROOT / "skills" / "chatgpt-review-loop" / "scripts" / "review_driver.py"
 STATE_PATH = ROOT / "skills" / "chatgpt-review-loop" / "scripts" / "review_state.py"
+TEST_URL = "https://chatgpt.com/c/test"
 
 
 def load(path, name):
@@ -39,6 +40,13 @@ def review_context(task: str = "完成当前用户需求") -> dict[str, str]:
         "implementation_summary": "已完成本轮实现",
         "tests": "pytest -q 通过",
     }
+
+
+async def review(driver, repo, **kwargs):
+    """Use an explicit target in tests that are not about target selection."""
+
+    kwargs.setdefault("conversation_url", TEST_URL)
+    return await driver.run_review(repo, **kwargs)
 
 
 class BridgeError(RuntimeError):
@@ -80,14 +88,14 @@ def test_pass_and_same_sha_guard(tmp_path):
     repo = make_repo(tmp_path)
     driver = load(DRIVER_PATH, "review_driver_pass")
     client = FakeClient(["审查完成 @@CODEX_REVIEW_STATUS=PASS@@"])
-    first = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
+    first = __import__("asyncio").run(review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert first["status"] == "PASS"
     assert "review_text" in first
     assert isinstance(first["review_text"], str)
     assert "CODEX_REVIEW_STATUS=PASS" in first["review_text"]
     state = load(STATE_PATH, "review_state_pass")
     assert state.load_state(repo)["passed_sha"] == first["sha"]
-    second = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
+    second = __import__("asyncio").run(review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert second["status"] == "already_passed"
     assert len(client.chats) == 1
 
@@ -111,7 +119,7 @@ def test_revise_sends_second_stage_and_no_code_change(tmp_path):
         "发现问题 @@CODEX_REVIEW_STATUS=REVISE@@",
         "@@CODEX_PROMPT_BEGIN@@修复问题并运行测试@@CODEX_PROMPT_END@@",
     ])
-    result = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
+    result = __import__("asyncio").run(review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert result["status"] == "REVISE"
     assert "review_text" in result
     assert isinstance(result["review_text"], str)
@@ -119,7 +127,7 @@ def test_revise_sends_second_stage_and_no_code_change(tmp_path):
     assert isinstance(result["codex_prompt"], str)
     assert result["codex_prompt"] == "修复问题并运行测试"
     assert len(client.chats) == 2
-    blocked = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
+    blocked = __import__("asyncio").run(review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert blocked["status"] == "NO_CODE_CHANGE"
 
 
@@ -127,7 +135,7 @@ def test_safe_retry_retries_once_but_unknown_delivery_does_not(tmp_path):
     repo = make_repo(tmp_path)
     driver = load(DRIVER_PATH, "review_driver_retry")
     client = FakeClient([BridgeError("temporary", safe_to_retry=True), "@@CODEX_REVIEW_STATUS=PASS@@"])
-    result = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
+    result = __import__("asyncio").run(review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert result["status"] == "PASS"
     assert len(client.chats) == 2
 
@@ -135,7 +143,7 @@ def test_safe_retry_retries_once_but_unknown_delivery_does_not(tmp_path):
     git(repo, "add", "module.py")
     git(repo, "commit", "-m", "second")
     unsafe = FakeClient([BridgeError("unknown", safe_to_retry=False)])
-    result = __import__("asyncio").run(driver.run_review(repo, client=unsafe, ensure_broker_fn=lambda: None, review_context=review_context()))
+    result = __import__("asyncio").run(review(driver, repo, client=unsafe, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert result["status"] == "REVIEW_DELIVERY_UNKNOWN"
     assert len(unsafe.chats) == 1
 
@@ -162,7 +170,7 @@ def test_resume_pending_prompt_request_without_sending_again(tmp_path):
         {"role": "user", "content": "@@CODEX_PROMPT_REQUEST=abc@@"},
         {"role": "assistant", "content": "@@CODEX_PROMPT_BEGIN@@\n修复 X\n@@CODEX_PROMPT_END@@"},
     ]
-    result = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
+    result = __import__("asyncio").run(review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert result["status"] == "REVISE"
     assert result["codex_prompt"] == "修复 X"
     assert client.chats == []
@@ -191,7 +199,7 @@ def test_pending_prompt_recovery_schema_returns_null_review_text(tmp_path):
         {"role": "assistant", "content": "@@CODEX_PROMPT_BEGIN@@\nfix\n@@CODEX_PROMPT_END@@"},
     ]
     result = __import__("asyncio").run(
-        driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context())
+        review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context())
     )
     assert result["status"] == "REVISE"
     assert "review_text" in result
@@ -222,13 +230,13 @@ def test_pending_prompt_recovery_restores_revise_state(tmp_path):
         {"role": "user", "content": "@@CODEX_PROMPT_REQUEST=abc@@"},
         {"role": "assistant", "content": "@@CODEX_PROMPT_BEGIN@@\n修复 X\n@@CODEX_PROMPT_END@@"},
     ]
-    result = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
+    result = __import__("asyncio").run(review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert result["status"] == "REVISE"
     state = state_module.load_state(repo)
     assert state["pending_request_id"] is None
     assert state["last_review_sha"] == sha
     assert state["last_status"] == "REVISE"
-    second = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
+    second = __import__("asyncio").run(review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context()))
     assert second["status"] == "NO_CODE_CHANGE"
     assert client.chats == []
 
@@ -256,7 +264,7 @@ def test_final_round_pending_prompt_recovery_returns_max_rounds_revise(tmp_path)
         {"role": "assistant", "content": "@@CODEX_PROMPT_BEGIN@@\n最终修复\n@@CODEX_PROMPT_END@@"},
     ]
     result = __import__("asyncio").run(
-        driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context())
+        review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context())
     )
     assert result["status"] == "MAX_ROUNDS_REVISE"
     assert "review_text" in result
@@ -293,7 +301,7 @@ def test_pending_review_recovery_returns_review_text(tmp_path):
         {"role": "assistant", "content": reviewer_text},
     ]
     result = __import__("asyncio").run(
-        driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context())
+        review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context())
     )
     assert result["status"] == "PASS"
     assert result["review_text"] == reviewer_text
@@ -304,11 +312,11 @@ def test_review_requires_context_and_rejects_empty_fields(tmp_path):
     repo = make_repo(tmp_path)
     driver = load(DRIVER_PATH, "review_driver_context_required")
     client = FakeClient([])
-    missing = __import__("asyncio").run(driver.run_review(repo, client=client, ensure_broker_fn=lambda: None))
+    missing = __import__("asyncio").run(review(driver, repo, client=client, ensure_broker_fn=lambda: None))
     assert missing["status"] == "REVIEW_CONTEXT_MISSING"
     assert client.chats == []
     empty = __import__("asyncio").run(
-        driver.run_review(
+        review(driver,
             repo,
             client=client,
             ensure_broker_fn=lambda: None,
@@ -331,13 +339,13 @@ def test_active_revise_cycle_rejects_original_task_change(tmp_path):
     driver = load(DRIVER_PATH, "review_driver_context_mismatch")
     client = FakeClient(["@@CODEX_REVIEW_STATUS=REVISE@@", "@@CODEX_PROMPT_BEGIN@@fix@@CODEX_PROMPT_END@@"])
     first = __import__("asyncio").run(
-        driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context("任务 A"))
+        review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context("任务 A"))
     )
     assert first["status"] == "REVISE"
     _commit_change(repo, 2, "second commit")
     before = len(client.chats)
     mismatch = __import__("asyncio").run(
-        driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context("任务 B"))
+        review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context("任务 B"))
     )
     assert mismatch["status"] == "REVIEW_CONTEXT_MISMATCH"
     assert len(client.chats) == before
@@ -442,13 +450,13 @@ def test_pass_starts_a_new_cycle_for_a_new_commit(tmp_path):
     driver = load(DRIVER_PATH, "review_driver_cycle_pass")
     state_module = load(STATE_PATH, "review_state_cycle_pass")
     first = __import__("asyncio").run(
-        driver.run_review(repo, client=FakeClient(["@@CODEX_REVIEW_STATUS=PASS@@"]), ensure_broker_fn=lambda: None, review_context=review_context("任务 A"))
+        review(driver, repo, client=FakeClient(["@@CODEX_REVIEW_STATUS=PASS@@"]), ensure_broker_fn=lambda: None, review_context=review_context("任务 A"))
     )
     assert first["round"] == 1
     first_state = state_module.load_state(repo)
     _commit_change(repo, 2, "second task")
     second = __import__("asyncio").run(
-        driver.run_review(repo, client=FakeClient(["@@CODEX_REVIEW_STATUS=PASS@@"]), ensure_broker_fn=lambda: None, review_context=review_context("任务 B"))
+        review(driver, repo, client=FakeClient(["@@CODEX_REVIEW_STATUS=PASS@@"]), ensure_broker_fn=lambda: None, review_context=review_context("任务 B"))
     )
     assert second["status"] == "PASS"
     assert second["round"] == 1
@@ -464,7 +472,7 @@ def test_revise_new_commit_increments_round_and_max_is_cycle_scoped(tmp_path):
     for value, message in [(1, "round one"), (2, "round two")]:
         client = FakeClient(["@@CODEX_REVIEW_STATUS=REVISE@@", "@@CODEX_PROMPT_BEGIN@@fix@@CODEX_PROMPT_END@@"])
         result = __import__("asyncio").run(
-            driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=context)
+            review(driver, repo, client=client, ensure_broker_fn=lambda: None, review_context=context)
         )
         assert result["status"] == "REVISE"
         if value == 1:
@@ -475,7 +483,7 @@ def test_revise_new_commit_increments_round_and_max_is_cycle_scoped(tmp_path):
 
     third_client = FakeClient(["@@CODEX_REVIEW_STATUS=REVISE@@", "@@CODEX_PROMPT_BEGIN@@fix@@CODEX_PROMPT_END@@"])
     third = __import__("asyncio").run(
-        driver.run_review(
+        review(driver,
             repo,
             client=third_client,
             ensure_broker_fn=lambda: None,
@@ -497,7 +505,7 @@ def test_revise_new_commit_increments_round_and_max_is_cycle_scoped(tmp_path):
     assert terminal_state["round"] == 3
     assert "review_text" not in terminal_state
     blocked = __import__("asyncio").run(
-        driver.run_review(repo, client=FakeClient([]), ensure_broker_fn=lambda: None, review_context=context)
+        review(driver, repo, client=FakeClient([]), ensure_broker_fn=lambda: None, review_context=context)
     )
     assert blocked["status"] == "MAX_ROUNDS"
     terminal_cycle = terminal_state["cycle_id"]
@@ -506,7 +514,7 @@ def test_revise_new_commit_increments_round_and_max_is_cycle_scoped(tmp_path):
 
     same_sha_new_task_client = FakeClient([])
     same_sha_new_task = __import__("asyncio").run(
-        driver.run_review(
+        review(driver,
             repo,
             client=same_sha_new_task_client,
             ensure_broker_fn=lambda: None,
@@ -524,7 +532,7 @@ def test_revise_new_commit_increments_round_and_max_is_cycle_scoped(tmp_path):
     _commit_change(repo, 5, "unrelated commit")
     new_sha_same_task_client = FakeClient([])
     new_sha_same_task = __import__("asyncio").run(
-        driver.run_review(
+        review(driver,
             repo,
             client=new_sha_same_task_client,
             ensure_broker_fn=lambda: None,
@@ -537,7 +545,7 @@ def test_revise_new_commit_increments_round_and_max_is_cycle_scoped(tmp_path):
     assert state_module.load_state(repo)["cycle_id"] == terminal_cycle
 
     fresh = __import__("asyncio").run(
-        driver.run_review(
+        review(driver,
             repo,
             client=FakeClient(["@@CODEX_REVIEW_STATUS=PASS@@"]),
             ensure_broker_fn=lambda: None,
@@ -549,3 +557,95 @@ def test_revise_new_commit_increments_round_and_max_is_cycle_scoped(tmp_path):
     fresh_state = state_module.load_state(repo)
     assert fresh_state["cycle_id"] != terminal_cycle
     assert fresh_state["task_hash"] != terminal_task_hash
+
+
+def test_new_cycle_requires_target_without_opening_bridge(tmp_path):
+    repo = make_repo(tmp_path)
+    driver = load(DRIVER_PATH, "review_driver_target_required")
+    client = FakeClient([])
+
+    result = __import__("asyncio").run(
+        driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context())
+    )
+
+    assert result["status"] == "REVIEW_TARGET_REQUIRED"
+    assert client.opens == []
+    assert client.chats == []
+
+
+def test_explicit_conversation_url_binds_resolved_target(tmp_path):
+    repo = make_repo(tmp_path)
+    driver = load(DRIVER_PATH, "review_driver_conversation_url")
+    state_module = load(STATE_PATH, "review_state_conversation_url")
+    client = FakeClient(["@@CODEX_REVIEW_STATUS=PASS@@"])
+
+    result = __import__("asyncio").run(
+        driver.run_review(
+            repo,
+            client=client,
+            ensure_broker_fn=lambda: None,
+            review_context=review_context(),
+            conversation_url=TEST_URL,
+        )
+    )
+
+    assert result["status"] == "PASS"
+    assert client.opens == [{"provider": "chatgpt", "url": TEST_URL}]
+    state = state_module.load_state(repo)
+    assert state["session_id"] == "session-1"
+    assert state["conversation_url"] == "https://chatgpt.com/c/1"
+
+
+def test_explicit_session_id_binds_resolved_target(tmp_path):
+    repo = make_repo(tmp_path)
+    driver = load(DRIVER_PATH, "review_driver_session_id")
+    state_module = load(STATE_PATH, "review_state_session_id")
+    client = FakeClient(["@@CODEX_REVIEW_STATUS=PASS@@"])
+
+    result = __import__("asyncio").run(
+        driver.run_review(
+            repo,
+            client=client,
+            ensure_broker_fn=lambda: None,
+            review_context=review_context(),
+            session_id="abc",
+        )
+    )
+
+    assert result["status"] == "PASS"
+    assert client.opens == [{"provider": "chatgpt", "session_id": "abc"}]
+    assert state_module.load_state(repo)["session_id"] == "session-1"
+
+
+def test_active_revise_reuses_saved_target_but_completed_cycle_does_not(tmp_path):
+    repo = make_repo(tmp_path)
+    driver = load(DRIVER_PATH, "review_driver_target_lifecycle")
+    client = FakeClient([
+        "@@CODEX_REVIEW_STATUS=REVISE@@",
+        "@@CODEX_PROMPT_BEGIN@@fix@@CODEX_PROMPT_END@@",
+        "@@CODEX_REVIEW_STATUS=PASS@@",
+    ])
+    first = __import__("asyncio").run(
+        driver.run_review(
+            repo,
+            client=client,
+            ensure_broker_fn=lambda: None,
+            review_context=review_context("task A"),
+            conversation_url=TEST_URL,
+        )
+    )
+    assert first["status"] == "REVISE"
+    _commit_change(repo, 2, "fix")
+    second = __import__("asyncio").run(
+        driver.run_review(repo, client=client, ensure_broker_fn=lambda: None, review_context=review_context("task A"))
+    )
+    assert second["status"] == "PASS"
+    assert client.opens[1] == {"provider": "chatgpt", "session_id": "session-1"}
+
+    _commit_change(repo, 3, "new task")
+    fresh_client = FakeClient([])
+    third = __import__("asyncio").run(
+        driver.run_review(repo, client=fresh_client, ensure_broker_fn=lambda: None, review_context=review_context("task B"))
+    )
+    assert third["status"] == "REVIEW_TARGET_REQUIRED"
+    assert fresh_client.opens == []
