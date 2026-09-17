@@ -1,0 +1,32 @@
+{
+  "name": "codex-chatgpt-review-loop",
+  "version": "0.1.0",
+  "description": "Bridge-backed ChatGPT review loop for Codex.",
+  "author": {
+    "name": "web-llm-bridge contributors"
+  },
+  "license": "AGPL-3.0-only",
+  "keywords": [
+    "codex",
+    "bridge",
+    "chatgpt",
+    "review",
+    "hooks"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex ChatGPT Review Loop",
+    "shortDescription": "Run a bounded code-review loop through Web LLM Bridge.",
+    "longDescription": "Coordinates SessionStart and Stop hooks with the Web LLM Bridge review driver. Hooks only prepare context and decide whether another review turn is needed; transport stays in Web LLM Bridge and repo-scoped review state stays below Git metadata.",
+    "developerName": "web-llm-bridge contributors",
+    "category": "Developer Tools",
+    "websiteURL": "https://github.com/Tuzfucius/web-llm-bridge",
+    "capabilities": [
+      "Interactive",
+      "Code Review"
+    ],
+    "defaultPrompt": [
+      "Run the ChatGPT review loop through Web LLM Bridge."
+    ]
+  }
+}
