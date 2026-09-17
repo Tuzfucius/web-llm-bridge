@@ -64,8 +64,15 @@ class SessionManager:
                 raise WebLLMBridgeError("Session 不存在", "SESSION_NOT_FOUND")
             if url:
                 url = runtime.normalize_url(url)
+
+                def normalized_record_url(item: dict[str, Any]) -> str | None:
+                    try:
+                        return runtime.normalize_url(item.get("current_url"))
+                    except (TypeError, ValueError, WebLLMBridgeError):
+                        return None
+
                 record = next(
-                    (item for item in self.store.list(provider) if item["current_url"] == url),
+                    (item for item in self.store.list(provider) if normalized_record_url(item) == url),
                     None,
                 )
             if not new and record is None and provider in self._active:

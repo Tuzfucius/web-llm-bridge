@@ -123,9 +123,14 @@
 
       await new Promise((resolve, reject) => {
         let settled = false;
+        let seenLoading = false;
+        let reloadReturned = false;
+        let completeFallbackChecks = 0;
+        let pollTimer = null;
         const timer = root.setTimeout(() => finishFailure(bridge.error("PAGE_NOT_READY", "The tab reload did not complete in time")), readyTimeoutMs);
         const cleanup = () => {
           root.clearTimeout(timer);
+          if (pollTimer !== null) root.clearTimeout(pollTimer);
           onUpdated.removeListener(handleUpdated);
           onRemoved.removeListener(handleRemoved);
         };
@@ -142,16 +147,54 @@
           reject(error);
         };
         const handleUpdated = (updatedId, changeInfo) => {
-          if (updatedId === tabId && changeInfo?.status === "complete") finishSuccess();
+          if (updatedId !== tabId) return;
+          if (changeInfo?.status === "loading") {
+            seenLoading = true;
+            return;
+          }
+          if (changeInfo?.status === "complete" && seenLoading) finishSuccess();
         };
         const handleRemoved = (removedId) => {
           if (removedId === tabId) finishFailure(bridge.error("TAB_CLOSED", "The tab was closed while reloading", true));
+        };
+        const inspectCurrentState = async () => {
+          if (settled || !reloadReturned) return;
+          try {
+            const current = await get(tabId);
+            if (current.status === "loading") {
+              seenLoading = true;
+              completeFallbackChecks = 0;
+            } else if (current.status === "complete") {
+              if (seenLoading) {
+                finishSuccess();
+                return;
+              }
+              // A few Chrome versions do not emit loading for reload. Require
+              // two post-reload complete observations so a stale event cannot
+              // finish the wait in the same turn as reload().
+              completeFallbackChecks += 1;
+              if (completeFallbackChecks >= 2) {
+                finishSuccess();
+                return;
+              }
+            }
+            if (!settled) {
+              pollTimer = root.setTimeout(() => {
+                pollTimer = null;
+                inspectCurrentState();
+              }, retryIntervalMs);
+            }
+          } catch (error) {
+            finishFailure(normalizeReloadError(error, tabId));
+          }
         };
         onUpdated.addListener(handleUpdated);
         onRemoved.addListener(handleRemoved);
         (async () => {
           try {
             await chrome.tabs.reload(tabId);
+            reloadReturned = true;
+            await inspectCurrentState();
           } catch (error) {
             finishFailure(await normalizeReloadError(error, tabId));
           }
