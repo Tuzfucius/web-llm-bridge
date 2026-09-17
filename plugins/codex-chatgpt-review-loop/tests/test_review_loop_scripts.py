@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import multiprocessing
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -34,6 +36,27 @@ def make_repo(tmp_path: Path, *, message: str = "initial") -> Path:
     return tmp_path
 
 
+def run_arm_cli(barrier, result_queue, repo: str, target: str) -> None:
+    barrier.wait()
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "review_activation.py"),
+            "--repo",
+            repo,
+            "arm",
+            "--conversation-url",
+            target,
+            "--task",
+            "concurrent activation task",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    result_queue.put((result.returncode, json.loads(result.stdout)))
+
+
 def test_state_round_trip_and_git_scoped_atomic_write(tmp_path):
     state = load("review_state")
     repo = make_repo(tmp_path)
@@ -64,6 +87,91 @@ def test_activation_arm_status_consume_and_clear(tmp_path):
     assert consumed["consumed"] is True
     assert activation.clear(repo) is True
     assert activation.load_activation(repo) is None
+
+
+def test_arm_rejects_existing_armed_activation(tmp_path):
+    activation = load("review_activation")
+    repo = make_repo(tmp_path)
+    first = activation.arm(repo, task="first task", conversation_url="https://chatgpt.com/c/first")
+    before = activation.activation_path(repo).read_text(encoding="utf-8")
+
+    with pytest.raises(activation.ActivationConflict) as error:
+        activation.arm(repo, task="second task", conversation_url="https://chatgpt.com/c/second")
+
+    assert error.value.code == "ACTIVATION_CONFLICT"
+    assert str(error.value) == f"review activation already armed: {first['activation_id']}"
+    assert activation.activation_path(repo).read_text(encoding="utf-8") == before
+    assert activation.load_activation(repo) == first
+
+
+def test_arm_allows_replacing_consumed_activation(tmp_path):
+    activation = load("review_activation")
+    repo = make_repo(tmp_path)
+    first = activation.arm(repo, task="first task", conversation_url="https://chatgpt.com/c/first")
+    activation.consume(repo, first["activation_id"])
+
+    second = activation.arm(repo, task="second task", conversation_url="https://chatgpt.com/c/second")
+
+    assert second["activation_id"] != first["activation_id"]
+    assert second["target_value"] == "https://chatgpt.com/c/second"
+    assert second["armed"] is True
+    assert activation.load_activation(repo) == second
+
+
+def test_arm_allows_replacing_cleared_activation(tmp_path):
+    activation = load("review_activation")
+    repo = make_repo(tmp_path)
+    activation.arm(repo, task="first task", conversation_url="https://chatgpt.com/c/first")
+    assert activation.clear(repo) is True
+
+    second = activation.arm(repo, task="second task", conversation_url="https://chatgpt.com/c/second")
+
+    assert second["target_value"] == "https://chatgpt.com/c/second"
+    assert second["armed"] is True
+
+
+def test_concurrent_cli_arm_allows_only_one_activation(tmp_path):
+    activation = load("review_activation")
+    repo = make_repo(tmp_path)
+    context = multiprocessing.get_context("spawn")
+    barrier = context.Barrier(2)
+    result_queue = context.Queue()
+    targets = ["https://chatgpt.com/c/first", "https://chatgpt.com/c/second"]
+    processes = [
+        context.Process(target=run_arm_cli, args=(barrier, result_queue, str(repo), target))
+        for target in targets
+    ]
+    for process in processes:
+        process.start()
+    results = [result_queue.get(timeout=30) for _ in processes]
+    for process in processes:
+        process.join(timeout=30)
+        assert process.exitcode == 0
+
+    successes = [payload for returncode, payload in results if returncode == 0]
+    conflicts = [payload for returncode, payload in results if returncode == 1]
+    assert len(successes) == 1
+    assert len(conflicts) == 1
+    assert conflicts[0]["code"] == "ACTIVATION_CONFLICT"
+    final = activation.load_activation(repo, required=True)
+    assert final is not None
+    assert final["activation_id"] == successes[0]["activation_id"]
+    assert final["target_value"] == successes[0]["target_value"]
+    assert activation._activation_lock_path(repo).exists()
+
+
+def test_arm_preserves_corrupt_activation(tmp_path):
+    activation = load("review_activation")
+    repo = make_repo(tmp_path)
+    path = activation.activation_path(repo)
+    path.parent.mkdir(parents=True)
+    before = "{not-json"
+    path.write_text(before, encoding="utf-8")
+
+    with pytest.raises(activation.ActivationError):
+        activation.arm(repo, task="task", conversation_url="https://chatgpt.com/c/second")
+
+    assert path.read_text(encoding="utf-8") == before
 
 
 @pytest.mark.parametrize(

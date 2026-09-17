@@ -88,6 +88,22 @@ Tests:
 Do not emit the marker for incomplete work, failed tests, a dirty or
 uncommitted worktree, or a missing user decision.
 
+### Pre-review abort cleanup
+
+Once `arm` succeeds, the activation is reserved until the first
+`@@REVIEW_READY@@` handoff. If this development turn ends before that first
+handoff for any reason, clear the activation before ending the turn:
+
+```bash
+python <plugin-root>/skills/chatgpt-review-loop/scripts/review_activation.py clear
+```
+
+This is required for implementation failure, required test failure, a blocker,
+a pending user decision, user cancellation, an abandoned task, a dirty or
+uncommitted worktree that prevents review, and every other early termination
+before the initial `@@REVIEW_READY@@`. Do not clear, consume, overwrite, or
+reuse an armed activation to start a different review.
+
 ## Review workflow
 
 When the Stop hook blocks, copy the complete context block to a UTF-8
@@ -114,6 +130,13 @@ python <plugin-root>/skills/chatgpt-review-loop/scripts/review_activation.py cle
 
 The active cycle state retains the resolved target for recovery and REVISE
 rounds.
+
+This pre-review cleanup rule ends at the first review handoff. After the Driver
+has started the initial review, `REVIEW_DELIVERY_UNKNOWN` remains an at-most-once
+recovery state: do not run generic cleanup that could remove the activation or
+state needed for recovery. The existing successful first binding still clears
+the activation; later REVISE rounds use `state.json` version 2 rather than
+activation state.
 
 The driver owns the existing bounded state machine (`PASS`, `REVISE`,
 `MAX_ROUNDS_REVISE`, `MAX_ROUNDS`, `NO_CODE_CHANGE`,
