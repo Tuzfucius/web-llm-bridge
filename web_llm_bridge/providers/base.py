@@ -19,6 +19,7 @@ class ProviderDefinition:
     default_url: str
     hosts: frozenset[str]
     capabilities: Mapping[str, bool]
+    canonical_host: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "hosts", frozenset(self.hosts))
@@ -31,4 +32,5 @@ class ProviderDefinition:
         if parsed.scheme != "https" or parsed.hostname not in self.hosts:
             raise WebLLMBridgeError(error_message("INVALID_URL"), "INVALID_URL")
         path = (parsed.path or "/").rstrip("/") or "/"
-        return f"https://{parsed.hostname.lower()}{path}"
+        host = self.canonical_host or parsed.hostname.lower()
+        return f"https://{host}{path}"
