@@ -125,7 +125,7 @@ def main() -> int:
         ):
             print(json.dumps({}))
             return 0
-    except (ActivationError, OSError, ValueError, RuntimeError):
+    except Exception:
         # Corrupt files, unknown versions, invalid cwd, and parser failures
         # are all authorization failures. Never turn them into a block.
         print(json.dumps({}))

@@ -36,6 +36,14 @@ class UnsupportedActivationVersion(ActivationError):
 def activation_path(repo_root: str | os.PathLike[str]) -> Path:
     """Return the Git-scoped activation location for a repository/worktree."""
     root = Path(repo_root).resolve()
+    root_result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    root = Path(root_result.stdout.strip()).resolve()
     result = subprocess.run(
         ["git", "rev-parse", "--git-path", "codex-chatgpt-review/activation.json"],
         cwd=root, check=True, capture_output=True, text=True,
