@@ -29,6 +29,10 @@ class ActivationMissing(ActivationError):
     code = "ACTIVATION_MISSING"
 
 
+class ActivationConflict(ActivationError):
+    code = "ACTIVATION_CONFLICT"
+
+
 class UnsupportedActivationVersion(ActivationError):
     code = "UNSUPPORTED_ACTIVATION_VERSION"
 
@@ -156,6 +160,9 @@ def arm(repo_root: str | os.PathLike[str], *, task: str, conversation_url: str |
         target_kind, target_value = "session_id", str(session_id).strip()
         if not target_value or any(character.isspace() for character in target_value):
             raise ActivationError("session ID must be non-empty and contain no whitespace")
+    existing = load_activation(repo_root)
+    if existing is not None and existing["armed"]:
+        raise ActivationConflict(f"review activation already armed: {existing['activation_id']}")
     activation = {"version": ACTIVATION_VERSION, "activation_id": str(uuid.uuid4()),
                   "target_kind": target_kind, "target_value": target_value,
                   "task_hash": task_hash(task), "armed": True}

@@ -66,6 +66,49 @@ def test_activation_arm_status_consume_and_clear(tmp_path):
     assert activation.load_activation(repo) is None
 
 
+def test_arm_rejects_existing_armed_activation(tmp_path):
+    activation = load("review_activation")
+    repo = make_repo(tmp_path)
+    first = activation.arm(repo, task="first task", conversation_url="https://chatgpt.com/c/first")
+    before = activation.activation_path(repo).read_text(encoding="utf-8")
+
+    with pytest.raises(activation.ActivationConflict) as error:
+        activation.arm(repo, task="second task", conversation_url="https://chatgpt.com/c/second")
+
+    assert error.value.code == "ACTIVATION_CONFLICT"
+    assert str(error.value) == f"review activation already armed: {first['activation_id']}"
+    assert activation.activation_path(repo).read_text(encoding="utf-8") == before
+    assert activation.load_activation(repo) == first
+
+
+def test_arm_allows_replacing_consumed_activation(tmp_path):
+    activation = load("review_activation")
+    repo = make_repo(tmp_path)
+    first = activation.arm(repo, task="first task", conversation_url="https://chatgpt.com/c/first")
+    activation.consume(repo, first["activation_id"])
+
+    second = activation.arm(repo, task="second task", conversation_url="https://chatgpt.com/c/second")
+
+    assert second["activation_id"] != first["activation_id"]
+    assert second["target_value"] == "https://chatgpt.com/c/second"
+    assert second["armed"] is True
+    assert activation.load_activation(repo) == second
+
+
+def test_arm_preserves_corrupt_activation(tmp_path):
+    activation = load("review_activation")
+    repo = make_repo(tmp_path)
+    path = activation.activation_path(repo)
+    path.parent.mkdir(parents=True)
+    before = "{not-json"
+    path.write_text(before, encoding="utf-8")
+
+    with pytest.raises(activation.ActivationError):
+        activation.arm(repo, task="task", conversation_url="https://chatgpt.com/c/second")
+
+    assert path.read_text(encoding="utf-8") == before
+
+
 @pytest.mark.parametrize(
     "payload",
     [
