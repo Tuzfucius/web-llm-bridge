@@ -283,6 +283,26 @@ def test_history_recovery_ignores_assistant_request_marker():
     assert result is None
 
 
+def test_history_recovery_does_not_cross_next_user_request():
+    driver = load(DRIVER_PATH, "review_driver_history_boundary")
+    client = FakeClient([])
+    client.history = [
+        {"role": "user", "content": "@@CODEX_REVIEW_REQUEST=abc@@"},
+        {"role": "assistant", "content": "malformed response"},
+        {"role": "user", "content": "unrelated request"},
+        {"role": "assistant", "content": "@@CODEX_REVIEW_STATUS=PASS@@"},
+    ]
+    result = __import__("asyncio").run(
+        driver._history_recovery(
+            client,
+            session_id="session-1",
+            request_marker="@@CODEX_REVIEW_REQUEST=abc@@",
+            parse_response=lambda text: {"ok": "PASS" in text, "status": "PASS"},
+        )
+    )
+    assert result is None
+
+
 def _commit_change(repo: Path, value: int, message: str) -> None:
     (repo / "module.py").write_text(f"VALUE = {value}\n", encoding="utf-8")
     git(repo, "add", "module.py")
@@ -292,16 +312,21 @@ def _commit_change(repo: Path, value: int, message: str) -> None:
 def test_pass_starts_a_new_cycle_for_a_new_commit(tmp_path):
     repo = make_repo(tmp_path)
     driver = load(DRIVER_PATH, "review_driver_cycle_pass")
+    state_module = load(STATE_PATH, "review_state_cycle_pass")
     first = __import__("asyncio").run(
         driver.run_review(repo, client=FakeClient(["@@CODEX_REVIEW_STATUS=PASS@@"]), ensure_broker_fn=lambda: None, review_context=review_context("任务 A"))
     )
     assert first["round"] == 1
+    first_state = state_module.load_state(repo)
     _commit_change(repo, 2, "second task")
     second = __import__("asyncio").run(
         driver.run_review(repo, client=FakeClient(["@@CODEX_REVIEW_STATUS=PASS@@"]), ensure_broker_fn=lambda: None, review_context=review_context("任务 B"))
     )
     assert second["status"] == "PASS"
     assert second["round"] == 1
+    second_state = state_module.load_state(repo)
+    assert first_state["task_hash"] != second_state["task_hash"]
+    assert first_state["cycle_id"] != second_state["cycle_id"]
 
 
 def test_revise_new_commit_increments_round_and_max_is_cycle_scoped(tmp_path):

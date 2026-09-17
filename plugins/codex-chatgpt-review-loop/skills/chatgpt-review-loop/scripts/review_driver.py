@@ -16,6 +16,7 @@ from pathlib import Path
 import subprocess
 import sys
 from typing import Any, Callable, Mapping
+import uuid
 
 
 MAX_ROUNDS = 3
@@ -102,8 +103,8 @@ def _safe_to_retry(error: BaseException) -> bool:
     return bool(getattr(error, "safe_to_retry", False))
 
 
-def _context_cycle_id(review_context: Mapping[str, str] | None) -> str | None:
-    """Identify a user task without persisting its full text in state."""
+def _context_task_hash(review_context: Mapping[str, str] | None) -> str | None:
+    """Hash the original task for active-cycle drift detection."""
 
     if not review_context:
         return None
@@ -111,6 +112,12 @@ def _context_cycle_id(review_context: Mapping[str, str] | None) -> str | None:
     if not original_task:
         return None
     return hashlib.sha256(original_task.encode("utf-8")).hexdigest()[:24]
+
+
+def _new_cycle_id() -> str:
+    """Create a local-only identity used to isolate review request IDs."""
+
+    return uuid.uuid4().hex[:24]
 
 
 def _validate_review_context(
@@ -197,7 +204,10 @@ async def _history_recovery(
         return None
 
     for message in messages[marker_index + 1 :]:
-        if str(message.get("role", "")).lower() != "assistant":
+        role = str(message.get("role", "")).lower()
+        if role == "user":
+            break
+        if role != "assistant":
             continue
         parsed = parse_response(str(message.get("content", "")))
         if parsed.get("ok"):
@@ -335,19 +345,16 @@ async def run_review(
     if max_rounds < 1:
         return {"ok": False, "status": "MAX_ROUNDS", "code": "MAX_ROUNDS", "message": "max_rounds must be positive"}
 
-    cycle_id = _context_cycle_id(normalized_context)
-    assert cycle_id is not None
+    task_hash = _context_task_hash(normalized_context)
+    assert task_hash is not None
     try:
         sha = _head_sha(root)
     except Exception as error:
         code = _error_code(error)
         return {"ok": False, "status": code, "code": code, "message": str(error)}
 
-    if (
-        (state.get("last_status") == "REVISE" or state.get("pending_request_id"))
-        and state.get("cycle_id")
-        and state.get("cycle_id") != cycle_id
-    ):
+    active_cycle = state.get("last_status") == "REVISE" or bool(state.get("pending_request_id"))
+    if active_cycle and state.get("task_hash") and state.get("task_hash") != task_hash:
         return {
             "ok": False,
             "status": "REVIEW_CONTEXT_MISMATCH",
@@ -356,11 +363,11 @@ async def run_review(
             "message": "Original task changed during an active REVISE cycle.",
         }
 
-    # PASS closes the current cycle.  A later commit starts a fresh cycle; it
-    # must not inherit the old round counter or passed SHA.
+    # PASS closes the current cycle. A later commit, or a new task at the same
+    # commit, starts a fresh cycle with a unique identity.
     if (
         state.get("last_status") == "PASS"
-        and state.get("passed_sha") != sha
+        and (state.get("passed_sha") != sha or state.get("task_hash") != task_hash)
         and not state.get("pending_request_id")
     ):
         state.update({
@@ -368,17 +375,15 @@ async def run_review(
             "last_review_sha": None,
             "passed_sha": None,
             "last_status": None,
-            "cycle_id": cycle_id,
+            "task_hash": task_hash,
+            "cycle_id": _new_cycle_id(),
         })
 
     # MAX_ROUNDS is terminal only for the current task.  A new original task
     # supplied in REVIEW_CONTEXT is allowed to begin a new cycle.
     if (
         state.get("last_status") == "MAX_ROUNDS"
-        and state.get("last_review_sha") != sha
-        and cycle_id
-        and state.get("cycle_id")
-        and cycle_id != state.get("cycle_id")
+        and state.get("task_hash") != task_hash
         and not state.get("pending_request_id")
     ):
         state.update({
@@ -386,17 +391,21 @@ async def run_review(
             "last_review_sha": None,
             "passed_sha": None,
             "last_status": None,
-            "cycle_id": cycle_id,
+            "task_hash": task_hash,
+            "cycle_id": _new_cycle_id(),
         })
 
-    if (
-        not state.get("cycle_id")
-        or (
-            not state.get("pending_request_id")
-            and state.get("last_status") not in {"REVISE", "MAX_ROUNDS"}
-        )
-    ):
-        state["cycle_id"] = cycle_id
+    if active_cycle:
+        cycle_id = str(state.get("cycle_id") or _new_cycle_id())
+    elif not state.get("cycle_id"):
+        cycle_id = _new_cycle_id()
+    elif state.get("last_status") not in {None, "PASS", "MAX_ROUNDS"}:
+        cycle_id = _new_cycle_id()
+    else:
+        cycle_id = str(state["cycle_id"])
+    state["version"] = 2
+    state["task_hash"] = task_hash
+    state["cycle_id"] = cycle_id
 
     round_number = int(state.get("round", 0)) + 1
     try:
@@ -486,7 +495,7 @@ async def run_review(
     request_id = str(context["request_id"])
     state.update(
         {
-            "version": 1,
+            "version": 2,
             "session_id": session_id,
             "conversation_url": conversation_url,
             "round": round_number,

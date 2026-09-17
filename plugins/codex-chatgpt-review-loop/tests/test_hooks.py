@@ -48,7 +48,17 @@ def test_stop_hook_uses_exact_sentinels_and_pass_has_priority():
     assert run_hook(
         "stop_review.py",
         {"last_assistant_message": "@@WEB_REVIEW_PASS@@\n@@REVIEW_READY@@"},
-    ) == {}
+    )["decision"] == "block"
+
+
+def test_stop_hook_requires_marker_at_final_non_empty_line():
+    assert run_hook("stop_review.py", {"last_assistant_message": "@@REVIEW_READY@@"})["decision"] == "block"
+    assert run_hook("stop_review.py", {"last_assistant_message": "@@REVIEW_READY@@\n\n"})["decision"] == "block"
+    assert run_hook("stop_review.py", {"last_assistant_message": "summary\n@@REVIEW_READY@@\nextra text"}) == {}
+    assert run_hook("stop_review.py", {"last_assistant_message": "```text\n@@REVIEW_READY@@\n```"}) == {}
+    assert run_hook("stop_review.py", {"last_assistant_message": "summary\n@@WEB_REVIEW_PASS@@"}) == {}
+    assert run_hook("stop_review.py", {"last_assistant_message": "@@WEB_REVIEW_PASS@@\nextra text"}) == {}
+    assert run_hook("stop_review.py", {"last_assistant_message": "```text\n@@WEB_REVIEW_PASS@@\n```"}) == {}
 
 
 def test_stop_hook_copies_context_into_continuation_reason():

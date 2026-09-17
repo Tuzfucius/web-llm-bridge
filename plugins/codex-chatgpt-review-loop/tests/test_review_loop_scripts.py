@@ -42,6 +42,39 @@ def test_state_round_trip_and_git_scoped_atomic_write(tmp_path):
     assert list(path.parent.glob("*.tmp")) == []
 
 
+def test_v1_state_migrates_task_hash_and_active_cycle_without_resend(tmp_path):
+    state = load("review_state")
+    repo = make_repo(tmp_path)
+    path = state.state_path(repo)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({
+            "version": 1,
+            "round": 1,
+            "last_status": "REVISE",
+            "pending_request_id": "request-1",
+            "cycle_id": "legacy-task-hash",
+        }),
+        encoding="utf-8",
+    )
+    migrated = state.load_state(repo)
+    assert migrated["version"] == 2
+    assert migrated["task_hash"] == "legacy-task-hash"
+    assert migrated["cycle_id"] == "legacy-task-hash"
+
+
+def test_v1_inactive_state_starts_without_legacy_cycle_identity(tmp_path):
+    state = load("review_state")
+    repo = make_repo(tmp_path)
+    path = state.state_path(repo)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"version": 1, "last_status": "PASS", "cycle_id": "legacy"}), encoding="utf-8")
+    migrated = state.load_state(repo)
+    assert migrated["version"] == 2
+    assert migrated["task_hash"] == "legacy"
+    assert migrated["cycle_id"] is None
+
+
 def test_state_corrupt_json_is_structured_error(tmp_path):
     state = load("review_state")
     repo = make_repo(tmp_path)

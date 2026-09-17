@@ -47,10 +47,11 @@ choice, or work already passed by external review. The Skill must preserve the
 original task in later review cycles while updating the summary and tests.
 
 When the Skill reports PASS, finish with @@WEB_REVIEW_PASS@@ and do not emit
-@@REVIEW_READY@@. When it reports REVISE, follow its concrete prompt, test,
-commit/push as applicable, produce a new context block, and then emit
-@@REVIEW_READY@@. The Stop hook only decides whether to continue; it never
-communicates with the browser or Bridge.
+@@REVIEW_READY@@. Once the Skill starts, it owns every review round: on REVISE,
+follow its concrete prompt, test, commit/push as applicable, update the context,
+and call review_driver again directly. Do not emit @@REVIEW_READY@@ after REVISE;
+the Stop hook only admits the initial Skill entry and never communicates with
+the browser or Bridge.
 """
     print(json.dumps({
         "hookSpecificOutput": {

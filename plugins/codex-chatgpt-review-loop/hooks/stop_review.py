@@ -12,8 +12,11 @@ CONTEXT_BEGIN = "@@REVIEW_CONTEXT_BEGIN@@"
 CONTEXT_END = "@@REVIEW_CONTEXT_END@@"
 
 
-def _has_standalone_marker(message: str, marker: str) -> bool:
-    return any(line.strip() == marker for line in message.splitlines())
+def _ends_with_marker(message: str, marker: str) -> bool:
+    """Accept a protocol marker only when it is the final non-empty line."""
+
+    lines = [line.strip() for line in message.splitlines() if line.strip()]
+    return bool(lines and lines[-1] == marker)
 
 
 def _context_excerpt(message: str) -> str:
@@ -37,11 +40,11 @@ def main() -> int:
     # Codex sets this flag when a stop hook is already trying to continue; do
     # not re-enter and create an unbounded loop.
     last_message = str(payload.get("last_assistant_message") or "")
-    if _has_standalone_marker(last_message, WEB_REVIEW_PASS):
+    if _ends_with_marker(last_message, WEB_REVIEW_PASS):
         print(json.dumps({}))
     elif payload.get("stop_hook_active"):
         print(json.dumps({}))
-    elif _has_standalone_marker(last_message, REVIEW_READY):
+    elif _ends_with_marker(last_message, REVIEW_READY):
         context = _context_excerpt(last_message)
         context_note = (
             "\n以下是本轮开发 context（原样传递给 Skill）：\n" + context
