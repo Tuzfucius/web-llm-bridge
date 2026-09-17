@@ -1,7 +1,7 @@
 {
   "name": "codex-chatgpt-review-loop",
   "version": "0.1.0",
-  "description": "Bridge-backed ChatGPT review loop for Codex.",
+  "description": "User-invoked ChatGPT review loop through an explicitly specified Web LLM Bridge conversation.",
   "author": {
     "name": "web-llm-bridge contributors"
   },
@@ -16,8 +16,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex ChatGPT Review Loop",
-    "shortDescription": "Run a bounded code-review loop through Web LLM Bridge.",
-    "longDescription": "Coordinates SessionStart and the initial Stop-hook handoff with a Bridge-backed ChatGPT review Skill. The Stop hook only enters the review loop once; subsequent REVISE rounds are driven directly by the Skill. Transport remains in Web LLM Bridge and repository-scoped review state remains below Git metadata.",
+    "shortDescription": "Run an explicit-target ChatGPT review loop through Web LLM Bridge.",
+    "longDescription": "Activates only when the user explicitly requests external ChatGPT review and supplies a ChatGPT conversation URL or Web LLM Bridge session ID. Ordinary coding tasks are unaffected; the static Stop hook is a fail-closed gate and subsequent REVISE rounds are driven directly by the Skill.",
     "developerName": "web-llm-bridge contributors",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/Tuzfucius/web-llm-bridge",
@@ -26,7 +26,7 @@
       "Code Review"
     ],
     "defaultPrompt": [
-      "Run the ChatGPT review loop through Web LLM Bridge."
+      "Use this plugin only when I explicitly request ChatGPT external review and provide a conversation URL or Bridge session ID."
     ]
   }
 }
